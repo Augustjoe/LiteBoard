@@ -1,0 +1,22 @@
+{
+  "pageConfig": {
+    "name": "SalesDashboard"
+  },
+  "dataSource": {
+    "id": "api_1",
+    "url": "https://jsonplaceholder.typicode.com/posts",
+    "method": "GET"
+  },
+  "component": {
+    "type": "ECharts",
+    "bindSource": "api_1",
+    "props": {
+      "title": "月度销售数据报表",
+      "chartType": "bar"
+    },
+    "dataMapping": {
+      "xField": "id",
+      "yField": "userId"
+    }
+  }
+}
