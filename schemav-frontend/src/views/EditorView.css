@@ -1,5 +1,6 @@
 /* ============================================
    EditorView Layout — Figma/Canva 风格沉浸式布局
+   Node 4 升级：点阵网格背景 + 绝对定位容器
    ============================================ */
 
 .editor-shell {
@@ -43,14 +44,15 @@
   min-width: 0;
 }
 
-/* 白色图表画布卡片 */
+/* Node 4 升级：画布改为 position:relative 容器 + 点阵网格背景 */
 .editor-canvas {
-  width: 800px;
-  height: 500px;
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: auto;
+
+  /* 20px 间距的点阵网格（Figma 风格） */
+  background-color: #f8f9fb;
+  background-image: radial-gradient(circle, #c0c4cc 1px, transparent 1px);
+  background-size: 20px 20px;
 }

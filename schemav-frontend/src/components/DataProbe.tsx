@@ -66,9 +66,18 @@ export default defineComponent({
         probeResult.value = data
         extractedKeys.value = [...new Set(extractKeys(data))]
 
-        // 🔗 将探针数据推入 Pinia Store，供图表组件消费
+        // 🔗 Node 4 升级：将探针数据推入 Pinia Store，并自动创建图表组件
         const arr = Array.isArray(data) ? data : [data]
         store.setRawData(arr)
+
+        // 向画布中央插入一个默认尺寸的图表组件
+        store.addComponent('chart-bar', {
+          chartSchema: {
+            chartType: 'bar',
+            xAxisField: '',
+            yAxisField: '',
+          },
+        })
       } catch (err) {
         error.value = err instanceof Error ? err.message : String(err)
         console.error('Error sending probe:', err)
@@ -107,6 +116,37 @@ export default defineComponent({
                 <li key={key}>{key}</li>
               ))}
             </ul>
+          </div>
+        )}
+
+        {/* Node 4 新增：已创建组件列表 */}
+        {store.components.length > 0 && (
+          <div class="result-panel" style={{ marginTop: '12px', borderTop: '1px solid #ebeef5', paddingTop: '12px' }}>
+            <h4>📐 画布组件 ({store.components.length})</h4>
+            <ul>
+              {store.components.map((comp) => (
+                <li
+                  key={comp.id}
+                  style={{
+                    cursor: 'pointer',
+                    fontWeight: store.selectedComponentId === comp.id ? 'bold' : 'normal',
+                    color: store.selectedComponentId === comp.id ? '#409eff' : '#606266',
+                  }}
+                  onClick={() => store.selectComponent(comp.id)}
+                >
+                  {comp.type} — {comp.id}
+                </li>
+              ))}
+            </ul>
+            {store.selectedComponent && (
+              <div style={{ fontSize: '11px', color: '#909399', marginTop: '4px' }}>
+                选中: {store.selectedComponent.id} @
+                (x:{store.selectedComponent.position.x},
+                y:{store.selectedComponent.position.y},
+                w:{store.selectedComponent.position.w},
+                h:{store.selectedComponent.position.h})
+              </div>
+            )}
           </div>
         )}
       </div>

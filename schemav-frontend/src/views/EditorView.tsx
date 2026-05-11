@@ -14,7 +14,7 @@ export default defineComponent({
           <DataProbe />
         </aside>
 
-        {/* 中间主工作区 */}
+        {/* 中间主工作区 — 点阵网格画布 */}
         <main class="editor-main">
           <div class="editor-canvas">
             <ChartRenderer />

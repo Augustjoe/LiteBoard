@@ -1,102 +1,55 @@
-import { defineComponent, computed } from 'vue'
+import { defineComponent } from 'vue'
 import { useEditorStore } from '../stores/editorStore'
+import ComponentWrapper from './ComponentWrapper'
 
+/**
+ * ChartRenderer — 渲染分发器
+ *
+ * Node 4 升级：不再负责单一图表渲染，而是遍历 store.components 数组，
+ * 为每个 ComponentInstance 生成一个 ComponentWrapper（绝对定位包装层）。
+ */
 export default defineComponent({
   name: 'ChartRenderer',
   setup() {
     const store = useEditorStore()
 
-    /** 核心 computed：根据 store 中的 rawData 和 chartSchema 动态组装 ECharts option */
-    const chartOption = computed(() => {
-      const { rawData, chartSchema } = store
-      const { xAxisField, yAxisField, chartType } = chartSchema
-
-      // 未配置必要字段时返回 null
-      if (!xAxisField || !yAxisField || rawData.length === 0) {
-        return null
-      }
-
-      return {
-        title: {
-          text: `${chartType === 'bar' ? '柱状图' : '折线图'} — ${yAxisField}`,
-          left: 'center',
-          top: 8,
-          textStyle: {
-            fontSize: 16,
-            fontWeight: 600,
-            color: '#303133',
-          },
-        },
-        tooltip: {
-          trigger: 'axis' as const,
-        },
-        legend: {
-          data: [yAxisField],
-          bottom: 8,
-        },
-        grid: {
-          left: '5%',
-          right: '5%',
-          top: 48,
-          bottom: 48,
-          containLabel: true,
-        },
-        xAxis: {
-          type: 'category' as const,
-          data: (rawData as Record<string, unknown>[]).map((item) => String(item[xAxisField] ?? '')),
-          axisLabel: {
-            rotate: rawData.length > 8 ? 30 : 0,
-            fontSize: 11,
-          },
-        },
-        yAxis: {
-          type: 'value' as const,
-          name: yAxisField,
-        },
-        series: [
-          {
-            name: yAxisField,
-            type: chartType,
-            data: (rawData as Record<string, unknown>[]).map((item) => {
-              const val = Number(item[yAxisField])
-              return Number.isNaN(val) ? 0 : val
-            }),
-            emphasis: {
-              focus: 'series' as const,
-            },
-            animationDelay: (idx: number) => idx * 50,
-          },
-        ],
-      }
-    })
-
     return () => (
-      <div class="chart-renderer" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
-        {chartOption.value ? (
-          <v-chart
-            option={chartOption.value}
-            style={{ width: '100%', height: '100%' }}
-            autoresize
-          />
-        ) : (
-          <div style={{
-            flex: 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexDirection: 'column',
-            gap: '8px',
-          }}>
-            {store.hasData ? (
-              <>
-                <el-empty description="请在右侧面板配置图表 X/Y 轴字段" />
-                <div style={{ fontSize: '12px', color: '#909399' }}>
-                  可用字段：{store.availableFields.join(', ') || '—'}
-                </div>
-              </>
-            ) : (
-              <el-empty description="暂无数据 — 请先在左侧探针面板获取数据" />
-            )}
+      <div
+        class="chart-renderer"
+        style={{
+          position: 'absolute',
+          inset: 0,
+        }}
+        onClick={() => {
+          // 点击画布空白区域取消选中
+          store.selectComponent(null)
+        }}
+      >
+        {store.components.map((comp) => (
+          <ComponentWrapper key={comp.id} component={comp} />
+        ))}
+
+        {/* 空画布引导提示 */}
+        {store.components.length === 0 && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexDirection: 'column',
+              gap: '12px',
+              pointerEvents: 'none',
+            }}
+          >
+            <div style={{ fontSize: '48px', opacity: 0.3 }}>📐</div>
+            <div style={{ fontSize: '16px', color: '#909399' }}>
+              画布为空 — 请在左侧探针面板获取数据并发送到画布
+            </div>
+            <div style={{ fontSize: '12px', color: '#c0c4cc' }}>
+              提示：点击「发送探针」后，数据将自动创建图表组件
+            </div>
           </div>
         )}
       </div>
