@@ -1,0 +1,56 @@
+/* ============================================
+   EditorView Layout — Figma/Canva 风格沉浸式布局
+   ============================================ */
+
+.editor-shell {
+  display: flex;
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+  background: #f0f2f5;
+}
+
+/* ---- 侧边面板通用 ---- */
+.editor-panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  overflow: hidden;
+}
+
+/* 左侧探针面板 */
+.editor-panel--left {
+  width: 350px;
+  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.06);
+  z-index: 10;
+}
+
+/* 右侧配置面板 */
+.editor-panel--right {
+  width: 320px;
+  box-shadow: -2px 0 12px rgba(0, 0, 0, 0.06);
+  z-index: 10;
+}
+
+/* ---- 中间主工作区 ---- */
+.editor-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* 白色图表画布卡片 */
+.editor-canvas {
+  width: 800px;
+  height: 500px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}

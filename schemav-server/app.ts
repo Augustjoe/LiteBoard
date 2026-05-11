@@ -1,6 +1,6 @@
-const express = require('express');
-const cors = require('cors');
-const apiRoutes = require('./routes/api');
+import express from 'express';
+import cors from 'cors';
+import apiRoutes from './routes/api.js';
 
 const app = express();
 const PORT = 3000;
@@ -15,3 +15,5 @@ app.use('/api', apiRoutes);
 app.listen(PORT, () => {
     console.log(`SchemaV BFF Server is running on http://localhost:${PORT}`);
 });
+
+export default app;

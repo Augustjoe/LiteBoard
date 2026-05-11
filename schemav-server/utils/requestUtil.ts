@@ -1,7 +1,7 @@
 /**
  * 使用 Node.js Fetch (Node 18+) 封装请求工具
  */
-exports.fetchData = async (url, method = 'GET') => {
+export const fetchData = async (url: string, method: string = 'GET'): Promise<unknown> => {
     try {
         const response = await fetch(url, {
             method,
@@ -17,7 +17,9 @@ exports.fetchData = async (url, method = 'GET') => {
             let errorDetail = '';
             try {
                 errorDetail = await response.text();
-            } catch (e) {}
+            } catch (e) {
+                // ignore read error
+            }
             throw new Error(`Target responded with status ${response.status}: ${errorDetail.substring(0, 100)}`);
         }
 
@@ -33,7 +35,7 @@ exports.fetchData = async (url, method = 'GET') => {
             }
         }
     } catch (error) {
-        if (error.name === 'AbortError') {
+        if (error instanceof Error && error.name === 'AbortError') {
             throw new Error('Request timed out');
         }
         throw error;

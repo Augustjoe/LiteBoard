@@ -1,21 +1,29 @@
-// compiler.js - 将JSON协议编译为Vue 3 SFC
+import fs from 'node:fs';
+import path from 'node:path';
 
-const fs = require('fs');
-const path = require('path');
+// 使用 process.cwd() 获取当前工作目录（脚本从项目根运行）
+const __dirname = process.cwd();
 
 // 1. 文件读取与解析
 const schemaPath = path.join(__dirname, 'mock/schema.json');
-const schemaContent = fs.readFileSync(schemaPath, 'utf-8');
-const schema = JSON.parse(schemaContent);
+const schemaContent: string = fs.readFileSync(schemaPath, 'utf-8');
+const schema = JSON.parse(schemaContent) as {
+    pageConfig: { name: string };
+    dataSource: { id: string; url: string; method: string };
+    component: {
+        props: { title: string; chartType: string };
+        dataMapping: { xField: string; yField: string };
+    };
+};
 
 // 提取配置
-const pageName = schema.pageConfig.name;
+const pageName: string = schema.pageConfig.name;
 const dataSource = schema.dataSource;
 const component = schema.component;
 
 // 辅助函数：生成数据获取逻辑 (fetch)
-function generateFetchLogic(dataSourceId, url, method) {
-  return `
+function generateFetchLogic(dataSourceId: string, url: string, method: string): string {
+    return `
 const ${dataSourceId}_data = ref([]);
 
 onMounted(async () => {
@@ -34,13 +42,19 @@ onMounted(async () => {
 }
 
 // 辅助函数：生成图表配置计算属性 (computed)
-function generateChartOption(component, dataSourceId) {
-  const title = component.props.title;
-  const chartType = component.props.chartType;
-  const xField = component.dataMapping.xField;
-  const yField = component.dataMapping.yField;
+function generateChartOption(
+    comp: {
+        props: { title: string; chartType: string };
+        dataMapping: { xField: string; yField: string };
+    },
+    dataSourceId: string
+): string {
+    const title = comp.props.title;
+    const chartType = comp.props.chartType;
+    const xField = comp.dataMapping.xField;
+    const yField = comp.dataMapping.yField;
 
-  return `
+    return `
 const chartOption = computed(() => {
   return {
     title: { 
@@ -48,17 +62,15 @@ const chartOption = computed(() => {
     },
     xAxis: {
       type: 'category',
-      // 动态映射 JSON 中的 xField
-      data: ${dataSourceId}_data.value.map(item => item['${xField}'])
+      data: ${dataSourceId}_data.value.map((item: Record<string, unknown>) => item['${xField}'])
     },
     yAxis: { 
       type: 'value' 
     },
     series: [
       {
-        // 动态映射 JSON 中的 chartType 和 yField
         type: '${chartType}',
-        data: ${dataSourceId}_data.value.map(item => item['${yField}'])
+        data: ${dataSourceId}_data.value.map((item: Record<string, unknown>) => item['${yField}'])
       }
     ]
   };
@@ -77,7 +89,6 @@ const vueSFCContent = `
 <script setup>
 import { ref, onMounted, computed } from 'vue';
 import VChart from 'vue-echarts';
-// 假设项目中已全局引入 ECharts，无需在此处手动引入 core
 
 // 1. 定义状态 (响应式数据)
 ${generateFetchLogic(dataSource.id, dataSource.url, dataSource.method)}
