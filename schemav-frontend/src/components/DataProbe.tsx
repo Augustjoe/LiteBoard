@@ -1,4 +1,5 @@
 import { defineComponent, ref } from 'vue'
+import { cloneDeep } from 'lodash-es'
 import { useEditorStore } from '../stores/editorStore'
 import './DataProbe.css'
 
@@ -70,14 +71,15 @@ export default defineComponent({
         const arr = Array.isArray(data) ? data : [data]
         store.setRawData(arr)
 
-        // 向画布中央插入一个默认尺寸的图表组件
-        store.addComponent('chart-bar', {
+        // 向画布中央插入一个默认尺寸的图表组件（深拷贝确保状态隔离）
+        store.addComponent('chart-bar', cloneDeep({
           chartSchema: {
             chartType: 'bar',
             xAxisField: '',
             yAxisField: '',
+            customOption: '{}',
           },
-        })
+        }))
       } catch (err) {
         error.value = err instanceof Error ? err.message : String(err)
         console.error('Error sending probe:', err)

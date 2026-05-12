@@ -1,5 +1,6 @@
 import { defineComponent, ref, computed, onMounted, onUnmounted, watch, type PropType } from 'vue'
-import { useEditorStore, type ComponentInstance } from '../stores/editorStore'
+import { merge } from 'lodash-es'
+import { useEditorStore, type ComponentInstance, type ChartSchema } from '../stores/editorStore'
 import VChart from 'vue-echarts'
 
 /**
@@ -16,6 +17,12 @@ import VChart from 'vue-echarts'
 type HandleDir = 'nw' | 'ne' | 'sw' | 'se' | 'n' | 's' | 'w' | 'e'
 
 const HANDLE_SIZE = 10
+/** 网格吸附单元尺寸（px），拖拽/缩放时强制对齐到该网格 */
+const GRID_SIZE = 20
+
+/** 将数值吸附到最近的网格点 */
+const snapToGrid = (value: number): number =>
+  Math.round(value / GRID_SIZE) * GRID_SIZE
 
 export default defineComponent({
   name: 'ComponentWrapper',
@@ -65,9 +72,7 @@ export default defineComponent({
     // ===================== ECharts Option =====================
 
     const chartOption = computed(() => {
-      const schema = props.component.props.chartSchema as
-        | { chartType: string; xAxisField: string; yAxisField: string }
-        | undefined
+      const schema = props.component.props.chartSchema as ChartSchema | undefined
 
       if (!schema || !schema.xAxisField || !schema.yAxisField || store.rawData.length === 0) {
         return null
@@ -75,7 +80,8 @@ export default defineComponent({
 
       const { xAxisField, yAxisField, chartType } = schema
 
-      return {
+      // 基础图表配置
+      const baseOption = {
         title: {
           text: `${chartType === 'bar' ? '柱状图' : '折线图'} — ${yAxisField}`,
           left: 'center',
@@ -129,7 +135,33 @@ export default defineComponent({
           },
         ],
       }
+
+      // 尝试解析用户自定义 JSON 配置，安全深度合并
+      const customStr = schema.customOption
+      if (!customStr || customStr === '{}') {
+        return baseOption
+      }
+
+      try {
+        const parsed = JSON.parse(customStr)
+        // merge 深度合并：customOption 覆盖 baseOption 同名字段
+        return merge({}, baseOption, parsed)
+      } catch (err) {
+        console.warn('[ChartRenderer] customOption JSON 解析失败，已回退到基础配置：', err)
+        return baseOption
+      }
     })
+
+    // ===================== 键盘删除 =====================
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!isSelected.value) return
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        // 防止浏览器后退（Backspace）或默认行为
+        e.preventDefault()
+        store.removeComponent(props.component.id)
+      }
+    }
 
     // ===================== 拖拽逻辑 =====================
 
@@ -176,8 +208,8 @@ export default defineComponent({
         const dy = e.clientY - dragStartMouse.value.y
 
         store.updateComponentPosition(props.component.id, {
-          x: Math.max(0, dragStartPos.value.x + dx),
-          y: Math.max(0, dragStartPos.value.y + dy),
+          x: snapToGrid(Math.max(0, dragStartPos.value.x + dx)),
+          y: snapToGrid(Math.max(0, dragStartPos.value.y + dy)),
         })
         return
       }
@@ -209,11 +241,12 @@ export default defineComponent({
           newY = sp.y + sp.h - newH
         }
 
+        // 网格吸附：位置与尺寸均对齐至 GRID_SIZE
         store.updateComponentPosition(props.component.id, {
-          x: Math.max(0, newX),
-          y: Math.max(0, newY),
-          w: newW,
-          h: newH,
+          x: snapToGrid(Math.max(0, newX)),
+          y: snapToGrid(Math.max(0, newY)),
+          w: snapToGrid(newW),
+          h: snapToGrid(newH),
         })
         return
       }
@@ -230,11 +263,13 @@ export default defineComponent({
     onMounted(() => {
       window.addEventListener('mousemove', onMouseMove)
       window.addEventListener('mouseup', onMouseUp)
+      window.addEventListener('keydown', onKeyDown)
     })
 
     onUnmounted(() => {
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)
+      window.removeEventListener('keydown', onKeyDown)
     })
 
     // ===================== ECharts resize =====================

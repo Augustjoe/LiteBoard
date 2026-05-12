@@ -1,14 +1,23 @@
 /* ============================================
    EditorView Layout — Figma/Canva 风格沉浸式布局
-   Node 4 升级：点阵网格背景 + 绝对定位容器
+   Node 5 升级：顶部导航栏 + 全屏预览支持
    ============================================ */
 
 .editor-shell {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   width: 100%;
   overflow: hidden;
   background: #f0f2f5;
+}
+
+/* ---- 主体容器（导航栏下方） ---- */
+.editor-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
 }
 
 /* ---- 侧边面板通用 ---- */
@@ -55,4 +64,12 @@
   background-color: #f8f9fb;
   background-image: radial-gradient(circle, #c0c4cc 1px, transparent 1px);
   background-size: 20px 20px;
+}
+
+/* ============================================
+   JSON 编辑器错误状态 (ChartConfigPanel)
+   ============================================ */
+.json-editor--error .el-textarea__inner {
+  border-color: #f56c6c !important;
+  box-shadow: 0 0 0 1px #f56c6c inset !important;
 }

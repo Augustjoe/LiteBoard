@@ -10,6 +10,8 @@ export interface ChartSchema {
   chartType: 'bar' | 'line'
   xAxisField: string
   yAxisField: string
+  /** ECharts 深度自定义 JSON 配置（用户手写的 JSON 字符串，将与基础图表深度合并） */
+  customOption?: string
 }
 
 /** 组件位置与尺寸 */
@@ -29,6 +31,20 @@ export interface ComponentInstance {
   props: Record<string, unknown> // 组件特有配置（chartSchema 等）
 }
 
+/** 大屏 Schema — 完整的项目配置 */
+export interface DashboardSchema {
+  version: string
+  title: string
+  canvas: {
+    width: number
+    height: number
+    background: string
+  }
+  components: ComponentInstance[]
+  createdAt: string
+  updatedAt: string
+}
+
 // ============================================================
 // 工具函数
 // ============================================================
@@ -38,12 +54,26 @@ function generateId(): string {
   return `comp-${_nextId++}`
 }
 
+/** 从 localStorage 恢复 _nextId，避免 id 冲突 */
+function restoreNextId(components: ComponentInstance[]): void {
+  const maxNum = components.reduce((max, c) => {
+    const match = c.id.match(/^comp-(\d+)$/)
+    return match ? Math.max(max, parseInt(match[1], 10)) : max
+  }, 0)
+  _nextId = maxNum + 1
+}
+
+const STORAGE_KEY = 'liteboard-dashboard-schema'
+
 // ============================================================
 // Store 定义
 // ============================================================
 
 export const useEditorStore = defineStore('editor', () => {
   // ===================== State =====================
+
+  /** 大屏标题 */
+  const title = ref('未命名大屏')
 
   /** 探针抓取的原始数据 */
   const rawData = ref<unknown[]>([])
@@ -60,6 +90,9 @@ export const useEditorStore = defineStore('editor', () => {
 
   /** 当前选中的组件 ID（null 表示未选中） */
   const selectedComponentId = ref<string | null>(null)
+
+  /** 全屏预览模式 */
+  const isFullscreenPreview = ref(false)
 
   // ===================== Getters =====================
 
@@ -88,6 +121,23 @@ export const useEditorStore = defineStore('editor', () => {
       chartSchema.value.xAxisField !== '' &&
       chartSchema.value.yAxisField !== ''
     )
+  })
+
+  /** 构建当前大屏 Schema 对象 */
+  const currentSchema = computed<DashboardSchema>(() => {
+    const now = new Date().toISOString()
+    return {
+      version: '1.0.0',
+      title: title.value,
+      canvas: {
+        width: 1920,
+        height: 1080,
+        background: '#f0f2f5',
+      },
+      components: components.value,
+      createdAt: now,
+      updatedAt: now,
+    }
   })
 
   // ===================== Actions =====================
@@ -157,21 +207,25 @@ export const useEditorStore = defineStore('editor', () => {
     comp.props.chartSchema = { ...current, ...partial }
   }
 
-  /** 删除指定组件 */
+  /** 更新当前选中组件的 customOption（JSON 编辑器双向绑定用） */
+  function updateCustomOption(jsonStr: string) {
+    const comp = selectedComponent.value
+    if (!comp) return
+    const current = (comp.props.chartSchema as ChartSchema) ?? {
+      chartType: 'bar',
+      xAxisField: '',
+      yAxisField: '',
+    }
+    comp.props.chartSchema = { ...current, customOption: jsonStr }
+  }
+
+  /** 删除指定组件，同时取消选中 */
   function removeComponent(id: string) {
     const idx = components.value.findIndex((c) => c.id === id)
     if (idx === -1) return
     components.value.splice(idx, 1)
-
-    if (selectedComponentId.value === id) {
-      // 尝试选中相邻组件
-      if (components.value.length > 0) {
-        const nextIdx = Math.min(idx, components.value.length - 1)
-        selectedComponentId.value = components.value[nextIdx].id
-      } else {
-        selectedComponentId.value = null
-      }
-    }
+    // 无论删除的是否为当前选中组件，一律取消选中，避免悬空引用
+    selectComponent(null)
   }
 
   /** 清空所有数据与组件 */
@@ -206,27 +260,115 @@ export const useEditorStore = defineStore('editor', () => {
     }
   }
 
+  // ===================== Schema 持久化 =====================
+
+  /** 将当前 Schema 序列化为 JSON 字符串并存入 localStorage */
+  function saveSchema(): DashboardSchema {
+    const schema = currentSchema.value
+    schema.updatedAt = new Date().toISOString()
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(schema))
+      console.log('[editorStore] Schema 已保存到 localStorage')
+    } catch (err) {
+      console.error('[editorStore] 保存 Schema 失败：', err)
+    }
+    return schema
+  }
+
+  /** 从 localStorage 加载 Schema，返回是否加载成功 */
+  function loadSchema(): boolean {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (!raw) {
+        console.log('[editorStore] localStorage 中无已保存的 Schema')
+        return false
+      }
+
+      const schema: DashboardSchema = JSON.parse(raw)
+
+      // 基础校验
+      if (!schema.components || !Array.isArray(schema.components)) {
+        console.warn('[editorStore] Schema 格式无效，已忽略')
+        return false
+      }
+
+      title.value = schema.title || '未命名大屏'
+      components.value = schema.components
+      selectedComponentId.value = null
+
+      // 恢复 id 计数器
+      restoreNextId(schema.components)
+
+      console.log(`[editorStore] Schema 加载成功，共 ${schema.components.length} 个组件`)
+      return true
+    } catch (err) {
+      console.error('[editorStore] 加载 Schema 失败：', err)
+      return false
+    }
+  }
+
+  /** 清空画布所有组件（保留数据） */
+  function clearCanvas(): void {
+    components.value = []
+    selectedComponentId.value = null
+    console.log('[editorStore] 画布已清空')
+  }
+
+  /** 重置整个编辑器（清空一切，包括 localStorage） */
+  function resetAll(): void {
+    title.value = '未命名大屏'
+    rawData.value = []
+    components.value = []
+    selectedComponentId.value = null
+    isFullscreenPreview.value = false
+    try {
+      localStorage.removeItem(STORAGE_KEY)
+    } catch (_) { /* ignore */ }
+    console.log('[editorStore] 编辑器已完全重置')
+  }
+
+  /** 切换全屏预览模式 */
+  function toggleFullscreenPreview(): void {
+    isFullscreenPreview.value = !isFullscreenPreview.value
+  }
+
+  /** 设置大屏标题 */
+  function setTitle(newTitle: string): void {
+    title.value = newTitle
+  }
+
   // ===================== 导出 =====================
 
   return {
     // state
+    title,
     rawData,
     components,
     selectedComponentId,
+    isFullscreenPreview,
     // getters
     availableFields,
     hasData,
     chartSchema,
     isChartReady,
     selectedComponent,
+    currentSchema,
     // actions
     setRawData,
     addComponent,
     updateComponentPosition,
     selectComponent,
     updateChartSchema,
+    updateCustomOption,
     removeComponent,
     clearData,
     autoSelectFields,
+    // schema persistence
+    saveSchema,
+    loadSchema,
+    clearCanvas,
+    resetAll,
+    toggleFullscreenPreview,
+    setTitle,
   }
 })
