@@ -5,12 +5,12 @@ import { ref, computed } from 'vue'
 // 接口定义
 // ============================================================
 
-/** 数据资产 - 经过清洗入库后的标准化数据集 */
+/** 数据资产 - 数据湖架构：直接全量存储后端返回的复杂对象或用户粘贴的 JSON */
 export interface DataAsset {
   id: string
   name: string
   fields: string[]
-  data: Record<string, unknown>[]
+  data: any
 }
 
 /** 图表配置 Schema（嵌入在 ComponentInstance.props 中） */
@@ -184,14 +184,13 @@ export const useEditorStore = defineStore('editor', () => {
   // ===================== Actions =====================
 
   function addAsset(asset: DataAsset): void {
-    if (!asset.id) {
-      asset.id = generateAssetId()
-    }
-    const existingIdx = assets.value.findIndex((a) => a.id === asset.id)
+    const id = asset.id || generateAssetId()
+    const entry: DataAsset = { ...asset, id }
+    const existingIdx = assets.value.findIndex((a) => a.id === id)
     if (existingIdx !== -1) {
-      assets.value[existingIdx] = { ...asset }
+      assets.value[existingIdx] = entry
     } else {
-      assets.value.push({ ...asset })
+      assets.value.push(entry)
     }
   }
 

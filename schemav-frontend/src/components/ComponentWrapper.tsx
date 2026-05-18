@@ -75,18 +75,41 @@ export default defineComponent({
 
     // ===================== ECharts Option（Node 6：从 assets 读取数据） =====================
 
-    const chartOption = computed(() => {
+    /** 图表未就绪的原因枚举（null = 已就绪） */
+    const chartBlockReason = computed<string | null>(() => {
       const schema = props.component.props.chartSchema as ChartSchema | undefined
 
       if (!schema || !schema.xAxisField || !schema.yAxisField || !schema.assetId) {
+        return 'no_binding'
+      }
+
+      const asset = store.assets.find((a) => a.id === schema.assetId)
+      if (!asset || !asset.data) {
+        return 'no_asset'
+      }
+
+      // 🛡️ 数据湖防崩溃兜底：如果 data 不是 Array，ECharts 无法消费
+      if (!Array.isArray(asset.data)) {
+        return 'complex_object'
+      }
+
+      if (asset.data.length === 0) {
+        return 'empty'
+      }
+
+      return null
+    })
+
+    const chartOption = computed(() => {
+      if (chartBlockReason.value !== null) {
         return null
       }
 
-      // 从 assets 中查找绑定的数据资产
+      const schema = props.component.props.chartSchema as ChartSchema | undefined
+      if (!schema) return null
+
       const asset = store.assets.find((a) => a.id === schema.assetId)
-      if (!asset || asset.data.length === 0) {
-        return null
-      }
+      if (!asset || !Array.isArray(asset.data)) return null
 
       const { xAxisField, yAxisField, chartType } = schema
 
@@ -411,10 +434,12 @@ export default defineComponent({
                   }}
                 >
                   <span>📊 图表组件</span>
-                  <span style={{ fontSize: '12px' }}>
-                    {store.assets.length === 0
-                      ? '请先在左侧探针面板获取数据并创建资产'
-                      : '请在右侧配置面板绑定数据资产'}
+                  <span style={{ fontSize: '12px', textAlign: 'center', padding: '0 16px' }}>
+                    {chartBlockReason.value === 'complex_object'
+                      ? '数据格式为复杂对象，请等待右侧数据映射器配置'
+                      : store.assets.length === 0
+                        ? '请先在左侧资产超市添加数据资产'
+                        : '请在右侧配置面板绑定数据资产'}
                   </span>
                 </div>
               )

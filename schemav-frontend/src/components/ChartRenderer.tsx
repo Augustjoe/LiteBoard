@@ -45,10 +45,10 @@ export default defineComponent({
           >
             <div style={{ fontSize: '48px', opacity: 0.3 }}>📐</div>
             <div style={{ fontSize: '16px', color: '#909399' }}>
-              画布为空 — 请在左侧探针面板获取数据并创建资产
+              画布为空 — 请在左侧资产超市添加数据资产并创建图表组件
             </div>
             <div style={{ fontSize: '12px', color: '#c0c4cc' }}>
-              提示：发送探针 → 萃取数据 → 保存资产 → 添加图表组件
+              提示：添加数据资产 → 创建图表组件 → 绑定资产 → 配置映射
             </div>
           </div>
         )}

@@ -1,15 +1,35 @@
 /**
  * 使用 Node.js Fetch (Node 18+) 封装请求工具
+ * 支持自定义 Headers 和 Body（用于探针代理转发）
  */
-export const fetchData = async (url: string, method: string = 'GET'): Promise<unknown> => {
+export const fetchData = async (
+    url: string,
+    method: string = 'GET',
+    customHeaders?: Record<string, string>,
+    body?: string
+): Promise<unknown> => {
     try {
-        const response = await fetch(url, {
+        const headers: Record<string, string> = {
+            'Accept': 'application/json',
+            'User-Agent': 'SchemaV-Probe/1.0',
+            ...(customHeaders || {}),
+        };
+
+        const fetchOptions: RequestInit = {
             method,
-            headers: {
-                'Accept': 'application/json',
-                'User-Agent': 'SchemaV-Probe/1.0'
+            headers,
+        };
+
+        // 非 GET 请求且提供了 body 时，携带请求体
+        if (method !== 'GET' && body) {
+            fetchOptions.body = body;
+            // 如果用户没有手动设 Content-Type，默认 JSON
+            if (!headers['Content-Type'] && !headers['content-type']) {
+                headers['Content-Type'] = 'application/json';
             }
-        });
+        }
+
+        const response = await fetch(url, fetchOptions);
 
         const contentType = response.headers.get('content-type');
         
