@@ -4,13 +4,17 @@ import { useEditorStore, type ComponentInstance, type ChartSchema } from '../sto
 import VChart from 'vue-echarts'
 
 /**
- * ComponentWrapper — 高阶包装组件
+ * ComponentWrapper — 高阶包装组件（Node 6 升级）
  *
  * 职责：
  * 1. 为每个 ComponentInstance 生成绝对定位的容器
  * 2. 处理鼠标拖拽（移动）和右下角手柄缩放
  * 3. 选中态：蓝色边框 + 8 个缩放手柄
  * 4. Z-Index 管理 + 事件冒泡阻止
+ *
+ * Node 6 升级：
+ * - chartOption 从 store.assets 中查找绑定资产的数据
+ * - 未绑定 assetId 时显示引导提示
  */
 
 // 缩放手柄的类型定义
@@ -69,12 +73,18 @@ export default defineComponent({
 
     const chartRef = ref<InstanceType<typeof VChart> | null>(null)
 
-    // ===================== ECharts Option =====================
+    // ===================== ECharts Option（Node 6：从 assets 读取数据） =====================
 
     const chartOption = computed(() => {
       const schema = props.component.props.chartSchema as ChartSchema | undefined
 
-      if (!schema || !schema.xAxisField || !schema.yAxisField || store.rawData.length === 0) {
+      if (!schema || !schema.xAxisField || !schema.yAxisField || !schema.assetId) {
+        return null
+      }
+
+      // 从 assets 中查找绑定的数据资产
+      const asset = store.assets.find((a) => a.id === schema.assetId)
+      if (!asset || asset.data.length === 0) {
         return null
       }
 
@@ -108,11 +118,11 @@ export default defineComponent({
         },
         xAxis: {
           type: 'category' as const,
-          data: (store.rawData as Record<string, unknown>[]).map((item) =>
+          data: asset.data.map((item) =>
             String(item[xAxisField] ?? ''),
           ),
           axisLabel: {
-            rotate: store.rawData.length > 8 ? 30 : 0,
+            rotate: asset.data.length > 8 ? 30 : 0,
             fontSize: 11,
           },
         },
@@ -124,7 +134,7 @@ export default defineComponent({
           {
             name: yAxisField,
             type: chartType,
-            data: (store.rawData as Record<string, unknown>[]).map((item) => {
+            data: asset.data.map((item) => {
               const val = Number(item[yAxisField])
               return Number.isNaN(val) ? 0 : val
             }),
@@ -402,9 +412,9 @@ export default defineComponent({
                 >
                   <span>📊 图表组件</span>
                   <span style={{ fontSize: '12px' }}>
-                    {store.hasData
-                      ? '请在右侧配置面板选择 X/Y 轴字段'
-                      : '请先在左侧探针面板获取数据'}
+                    {store.assets.length === 0
+                      ? '请先在左侧探针面板获取数据并创建资产'
+                      : '请在右侧配置面板绑定数据资产'}
                   </span>
                 </div>
               )

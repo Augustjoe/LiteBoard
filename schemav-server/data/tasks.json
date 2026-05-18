@@ -1,0 +1,23 @@
+[
+  {
+    "id": "9ac009bd-ffe1-4e65-a9a3-638e4a57756b",
+    "name": "新建大屏任务",
+    "description": "新建大屏任务",
+    "cover": "linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)",
+    "createdAt": "2026-05-18T06:41:04.840Z",
+    "updatedAt": "2026-05-18T06:41:04.840Z",
+    "schema": {
+      "version": "1.0.0",
+      "title": "新建大屏任务",
+      "canvas": {
+        "width": 1920,
+        "height": 1080,
+        "background": "#f0f2f5"
+      },
+      "components": [],
+      "assets": [],
+      "createdAt": "2026-05-18T06:41:04.840Z",
+      "updatedAt": "2026-05-18T06:41:04.840Z"
+    }
+  }
+]

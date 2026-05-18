@@ -1,0 +1,212 @@
+/**
+ * TaskHubView — 任务大厅（全栈重构）
+ *
+ * 功能：
+ * - 展示所有大屏任务卡片网格
+ * - 搜索按名称过滤
+ * - 新建大屏任务（弹窗表单）
+ * - 每张卡片：预览、编辑、复制、删除
+ */
+
+/* ============================================
+   Layout
+   ============================================ */
+.task-hub {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #f5f7fa;
+}
+
+/* ============================================
+   Top Navigation
+   ============================================ */
+.task-hub__header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+  padding: 0 32px;
+  background: #fff;
+  border-bottom: 1px solid #e4e7ed;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.04);
+}
+
+.task-hub__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: 700;
+  color: #303133;
+  letter-spacing: 0.5px;
+}
+
+.task-hub__brand-icon {
+  font-size: 24px;
+}
+
+.task-hub__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* ============================================
+   Grid Container
+   ============================================ */
+.task-hub__grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 24px;
+  padding: 32px;
+  align-content: start;
+}
+
+/* ============================================
+   Empty State
+   ============================================ */
+.task-hub__empty {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  color: #909399;
+}
+
+.task-hub__empty-icon {
+  font-size: 64px;
+  margin-bottom: 16px;
+  opacity: 0.6;
+}
+
+.task-hub__empty-text {
+  font-size: 16px;
+  margin-bottom: 24px;
+}
+
+/* ============================================
+   Task Card
+   ============================================ */
+.task-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  transition: transform 0.2s, box-shadow 0.2s;
+  cursor: default;
+}
+
+.task-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+}
+
+/* ---- Cover (16:9 aspect ratio) ---- */
+.task-card__cover {
+  position: relative;
+  width: 100%;
+  padding-top: 56.25%; /* 16:9 */
+  overflow: hidden;
+}
+
+.task-card__cover-bg {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.task-card__cover-icon {
+  font-size: 48px;
+  opacity: 0.6;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.15));
+}
+
+/* ---- Info ---- */
+.task-card__info {
+  flex: 1;
+  padding: 16px 20px 12px;
+}
+
+.task-card__name {
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+  margin: 0 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-card__time {
+  font-size: 12px;
+  color: #909399;
+  margin: 0;
+}
+
+/* ---- Actions ---- */
+.task-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 20px 16px;
+  flex-wrap: wrap;
+}
+
+/* ---- Dropdown (top-right corner) ---- */
+.task-card__more {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+}
+
+.task-card__more-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: none;
+  background: rgba(255, 255, 255, 0.85);
+  color: #606266;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+
+.task-card__more-btn:hover {
+  background: rgba(255, 255, 255, 1);
+  color: #303133;
+}
+
+/* ============================================
+   Responsive
+   ============================================ */
+@media (max-width: 640px) {
+  .task-hub__header {
+    padding: 0 16px;
+  }
+
+  .task-hub__grid {
+    grid-template-columns: 1fr;
+    padding: 16px;
+    gap: 16px;
+  }
+
+  .task-hub__actions {
+    gap: 8px;
+  }
+}

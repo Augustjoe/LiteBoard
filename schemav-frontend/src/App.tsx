@@ -1,28 +1,15 @@
-import { defineComponent, onMounted } from 'vue'
-import { useEditorStore } from './stores/editorStore'
-import EditorView from './views/EditorView'
+import { defineComponent } from 'vue'
 import './style.css'
 
 /**
- * App — 应用根组件（Node 5 升级）
+ * App — 应用根组件（全栈重构）
  *
- * 初始化时自动从 localStorage 恢复上次保存的 Schema
+ * 移除旧的初始化逻辑，路由由 vue-router 接管。
+ * 所有页面级逻辑下沉到各 View 组件。
  */
 export default defineComponent({
   name: 'App',
   setup() {
-    const store = useEditorStore()
-
-    onMounted(() => {
-      // 尝试从 localStorage 加载上一次保存的 Schema
-      const loaded = store.loadSchema()
-      if (loaded) {
-        console.log('[App] 已恢复上次保存的项目')
-      } else {
-        console.log('[App] 新项目就绪，等待探针数据...')
-      }
-    })
-
-    return () => <EditorView />
+    return () => <router-view />
   },
 })

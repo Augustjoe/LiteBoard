@@ -1,38 +1,36 @@
 import { defineComponent, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useEditorStore } from '../stores/editorStore'
 import { generateVueCode, downloadVueFile } from '../utils/codeGenerator'
 
 /**
- * EditorHeader — 顶部导航栏（Node 5 新增）
+ * EditorHeader — 顶部导航栏（全栈重构）
  *
- * 功能：
- * - 项目名称标识
- * - 【保存项目】→ localStorage 持久化
- * - 【清空画布】→ 重置所有组件
- * - 【导出代码】→ 弹出代码预览对话框，支持复制/下载 .vue 文件
- * - 【全屏预览】→ 进入只读模式，隐藏所有编辑器面板
+ * 变更：
+ * - 【保存项目】→ 调用 store.saveTask() 持久化到后端
+ * - 新增【返回大厅】按钮 → router.push('/')
+ * - 其余功能保持不变
  */
 export default defineComponent({
   name: 'EditorHeader',
   setup() {
     const store = useEditorStore()
+    const router = useRouter()
 
     // ==================== 导出代码对话框 ====================
     const codeDialogVisible = ref(false)
     const generatedCode = ref('')
     const copySuccess = ref(false)
 
-    /** 打开导出代码对话框 */
     const onExportCode = () => {
       const schema = store.currentSchema
-      const code = generateVueCode(schema, store.rawData)
+      const code = generateVueCode(schema)
       generatedCode.value = code
       codeDialogVisible.value = true
       copySuccess.value = false
     }
 
-    /** 复制代码到剪贴板 */
     const onCopyCode = async () => {
       try {
         await navigator.clipboard.writeText(generatedCode.value)
@@ -41,7 +39,6 @@ export default defineComponent({
           copySuccess.value = false
         }, 2000)
       } catch {
-        // 降级方案：使用 textarea 复制
         const textarea = document.createElement('textarea')
         textarea.value = generatedCode.value
         textarea.style.position = 'fixed'
@@ -57,7 +54,6 @@ export default defineComponent({
       }
     }
 
-    /** 下载 .vue 文件 */
     const onDownloadCode = () => {
       const filename = `${store.title || 'dashboard'}.vue`
       downloadVueFile(generatedCode.value, filename)
@@ -65,9 +61,17 @@ export default defineComponent({
 
     // ==================== 其他操作 ====================
 
-    const onSave = () => {
-      store.saveSchema()
-      ElMessage.success('项目已保存到本地存储')
+    const onSave = async () => {
+      if (!store.currentTaskId) {
+        ElMessage.warning('无法保存：无关联任务 ID')
+        return
+      }
+      const ok = await store.saveTask()
+      if (ok) {
+        ElMessage.success('项目已保存到服务器')
+      } else {
+        ElMessage.error('保存失败，请重试')
+      }
     }
 
     const onClearCanvas = () => {
@@ -93,6 +97,10 @@ export default defineComponent({
       store.toggleFullscreenPreview()
     }
 
+    const onBackToHub = () => {
+      router.push('/')
+    }
+
     return () => (
       <header
         class="editor-header"
@@ -109,8 +117,16 @@ export default defineComponent({
           flexShrink: 0,
         }}
       >
-        {/* 左侧：品牌标识 */}
+        {/* 左侧：品牌标识 + 返回大厅 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <el-button
+            icon="ArrowLeft"
+            size="default"
+            onClick={onBackToHub}
+          >
+            返回大厅
+          </el-button>
+          <el-divider direction="vertical" />
           <div style={{
             fontSize: '18px',
             fontWeight: 700,

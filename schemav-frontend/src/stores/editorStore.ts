@@ -5,12 +5,22 @@ import { ref, computed } from 'vue'
 // 接口定义
 // ============================================================
 
+/** 数据资产 - 经过清洗入库后的标准化数据集 */
+export interface DataAsset {
+  id: string
+  name: string
+  fields: string[]
+  data: Record<string, unknown>[]
+}
+
 /** 图表配置 Schema（嵌入在 ComponentInstance.props 中） */
 export interface ChartSchema {
   chartType: 'bar' | 'line'
   xAxisField: string
   yAxisField: string
-  /** ECharts 深度自定义 JSON 配置（用户手写的 JSON 字符串，将与基础图表深度合并） */
+  /** 绑定的数据资产 ID */
+  assetId?: string
+  /** ECharts 深度自定义 JSON 配置 */
   customOption?: string
 }
 
@@ -25,10 +35,10 @@ export interface ComponentPosition {
 /** 画布上的一个组件实例 */
 export interface ComponentInstance {
   id: string
-  type: string // 组件类型，如 'chart-bar' | 'chart-line' | ...
+  type: string
   position: ComponentPosition
   zIndex: number
-  props: Record<string, unknown> // 组件特有配置（chartSchema 等）
+  props: Record<string, unknown>
 }
 
 /** 大屏 Schema — 完整的项目配置 */
@@ -41,8 +51,20 @@ export interface DashboardSchema {
     background: string
   }
   components: ComponentInstance[]
+  assets: DataAsset[]
   createdAt: string
   updatedAt: string
+}
+
+/** 后端返回的 Task 完整结构 */
+export interface Task {
+  id: string
+  name: string
+  description: string
+  cover: string
+  createdAt: string
+  updatedAt: string
+  schema: DashboardSchema
 }
 
 // ============================================================
@@ -50,11 +72,17 @@ export interface DashboardSchema {
 // ============================================================
 
 let _nextId = 1
+let _nextAssetId = 1
+
 function generateId(): string {
   return `comp-${_nextId++}`
 }
 
-/** 从 localStorage 恢复 _nextId，避免 id 冲突 */
+function generateAssetId(): string {
+  return `asset-${_nextAssetId++}`
+}
+
+/** 恢复组件 id 计数器 */
 function restoreNextId(components: ComponentInstance[]): void {
   const maxNum = components.reduce((max, c) => {
     const match = c.id.match(/^comp-(\d+)$/)
@@ -63,7 +91,16 @@ function restoreNextId(components: ComponentInstance[]): void {
   _nextId = maxNum + 1
 }
 
-const STORAGE_KEY = 'liteboard-dashboard-schema'
+/** 恢复资产 id 计数器 */
+function restoreNextAssetId(assets: DataAsset[]): void {
+  const maxNum = assets.reduce((max, a) => {
+    const match = a.id.match(/^asset-(\d+)$/)
+    return match ? Math.max(max, parseInt(match[1], 10)) : max
+  }, 0)
+  _nextAssetId = maxNum + 1
+}
+
+const API_BASE = '/api/tasks'
 
 // ============================================================
 // Store 定义
@@ -72,18 +109,14 @@ const STORAGE_KEY = 'liteboard-dashboard-schema'
 export const useEditorStore = defineStore('editor', () => {
   // ===================== State =====================
 
+  /** 当前编辑的任务 ID */
+  const currentTaskId = ref<string | null>(null)
+
   /** 大屏标题 */
   const title = ref('未命名大屏')
 
-  /** 探针抓取的原始数据 */
-  const rawData = ref<unknown[]>([])
-
-  /** 从 rawData 第一项中提取的可用字段列表 */
-  const availableFields = computed<string[]>(() => {
-    const first = rawData.value[0]
-    if (!first || typeof first !== 'object') return []
-    return Object.keys(first as Record<string, unknown>)
-  })
+  /** 数据资产列表 */
+  const assets = ref<DataAsset[]>([])
 
   /** 画布上的所有组件实例 */
   const components = ref<ComponentInstance[]>([])
@@ -96,15 +129,22 @@ export const useEditorStore = defineStore('editor', () => {
 
   // ===================== Getters =====================
 
-  const hasData = computed(() => rawData.value.length > 0)
+  const hasData = computed(() => assets.value.length > 0)
 
-  /** 当前选中的组件实例（便捷访问） */
+  const availableFields = computed<string[]>(() => {
+    const comp = selectedComponent.value
+    if (!comp) return []
+    const schema = comp.props.chartSchema as ChartSchema | undefined
+    if (!schema?.assetId) return []
+    const asset = assets.value.find((a) => a.id === schema.assetId)
+    return asset?.fields ?? []
+  })
+
   const selectedComponent = computed<ComponentInstance | null>(() => {
     if (!selectedComponentId.value) return null
     return components.value.find((c) => c.id === selectedComponentId.value) ?? null
   })
 
-  /** 当前选中组件的图表 Schema（兼容旧 API，保持 ChartConfigPanel 正常运作） */
   const chartSchema = computed<ChartSchema>(() => {
     const comp = selectedComponent.value
     if (!comp) {
@@ -114,12 +154,12 @@ export const useEditorStore = defineStore('editor', () => {
     return schema ?? { chartType: 'bar', xAxisField: '', yAxisField: '' }
   })
 
-  /** 图表是否就绪（有数据 + 已配置 X/Y 轴） */
   const isChartReady = computed(() => {
+    const cs = chartSchema.value
     return (
-      hasData.value &&
-      chartSchema.value.xAxisField !== '' &&
-      chartSchema.value.yAxisField !== ''
+      !!cs.assetId &&
+      cs.xAxisField !== '' &&
+      cs.yAxisField !== ''
     )
   })
 
@@ -135,6 +175,7 @@ export const useEditorStore = defineStore('editor', () => {
         background: '#f0f2f5',
       },
       components: components.value,
+      assets: assets.value,
       createdAt: now,
       updatedAt: now,
     }
@@ -142,15 +183,41 @@ export const useEditorStore = defineStore('editor', () => {
 
   // ===================== Actions =====================
 
-  /** 设置探针返回的原始数据（纯数据存储，不自动选字段） */
-  function setRawData(data: unknown[]) {
-    rawData.value = Array.isArray(data) ? data : [data]
+  function addAsset(asset: DataAsset): void {
+    if (!asset.id) {
+      asset.id = generateAssetId()
+    }
+    const existingIdx = assets.value.findIndex((a) => a.id === asset.id)
+    if (existingIdx !== -1) {
+      assets.value[existingIdx] = { ...asset }
+    } else {
+      assets.value.push({ ...asset })
+    }
   }
 
-  /** 向画布添加新组件，自动选中并置顶 */
+  function removeAsset(assetId: string): void {
+    const idx = assets.value.findIndex((a) => a.id === assetId)
+    if (idx === -1) return
+    assets.value.splice(idx, 1)
+    components.value.forEach((comp) => {
+      const schema = comp.props.chartSchema as ChartSchema | undefined
+      if (schema?.assetId === assetId) {
+        comp.props.chartSchema = {
+          ...(schema ?? { chartType: 'bar', xAxisField: '', yAxisField: '' }),
+          assetId: undefined,
+          xAxisField: '',
+          yAxisField: '',
+        }
+      }
+    })
+  }
+
+  function getAssetById(assetId: string): DataAsset | undefined {
+    return assets.value.find((a) => a.id === assetId)
+  }
+
   function addComponent(type: string, defaultProps?: Record<string, unknown>) {
     const maxZ = components.value.reduce((max, c) => Math.max(max, c.zIndex), 0)
-    // 新组件做轻微偏移，避免完全重叠
     const offset = (components.value.length % 5) * 30
 
     const newComp: ComponentInstance = {
@@ -168,14 +235,8 @@ export const useEditorStore = defineStore('editor', () => {
 
     components.value.push(newComp)
     selectedComponentId.value = newComp.id
-
-    // 图表类组件：自动根据 availableFields 预选 X/Y 轴字段
-    if (type.startsWith('chart-') && hasData.value) {
-      autoSelectFields()
-    }
   }
 
-  /** 更新指定组件的位置和/或尺寸 */
   function updateComponentPosition(id: string, newPos: Partial<ComponentPosition>) {
     const comp = components.value.find((c) => c.id === id)
     if (comp) {
@@ -183,7 +244,6 @@ export const useEditorStore = defineStore('editor', () => {
     }
   }
 
-  /** 选中组件（同时将其 zIndex 置顶） */
   function selectComponent(id: string | null) {
     selectedComponentId.value = id
     if (id) {
@@ -195,7 +255,6 @@ export const useEditorStore = defineStore('editor', () => {
     }
   }
 
-  /** 更新当前选中组件的图表 Schema */
   function updateChartSchema(partial: Partial<ChartSchema>) {
     const comp = selectedComponent.value
     if (!comp) return
@@ -207,7 +266,6 @@ export const useEditorStore = defineStore('editor', () => {
     comp.props.chartSchema = { ...current, ...partial }
   }
 
-  /** 更新当前选中组件的 customOption（JSON 编辑器双向绑定用） */
   function updateCustomOption(jsonStr: string) {
     const comp = selectedComponent.value
     if (!comp) return
@@ -219,23 +277,19 @@ export const useEditorStore = defineStore('editor', () => {
     comp.props.chartSchema = { ...current, customOption: jsonStr }
   }
 
-  /** 删除指定组件，同时取消选中 */
   function removeComponent(id: string) {
     const idx = components.value.findIndex((c) => c.id === id)
     if (idx === -1) return
     components.value.splice(idx, 1)
-    // 无论删除的是否为当前选中组件，一律取消选中，避免悬空引用
     selectComponent(null)
   }
 
-  /** 清空所有数据与组件 */
   function clearData() {
-    rawData.value = []
+    assets.value = []
     components.value = []
     selectedComponentId.value = null
   }
 
-  /** 自动选择字段：X=第一个字段，Y=最后一个字段 */
   function autoSelectFields() {
     const fields = availableFields.value
     if (fields.length === 0) return
@@ -243,7 +297,6 @@ export const useEditorStore = defineStore('editor', () => {
     if (!comp) return
     const schema = comp.props.chartSchema as ChartSchema | undefined
     if (!schema) {
-      // 没有 chartSchema 则初始化一个
       comp.props.chartSchema = {
         chartType: 'bar',
         xAxisField: fields[0],
@@ -260,79 +313,131 @@ export const useEditorStore = defineStore('editor', () => {
     }
   }
 
-  // ===================== Schema 持久化 =====================
+  // ===================== 从 Schema 对象填充 State =====================
 
-  /** 将当前 Schema 序列化为 JSON 字符串并存入 localStorage */
-  function saveSchema(): DashboardSchema {
-    const schema = currentSchema.value
-    schema.updatedAt = new Date().toISOString()
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(schema))
-      console.log('[editorStore] Schema 已保存到 localStorage')
-    } catch (err) {
-      console.error('[editorStore] 保存 Schema 失败：', err)
-    }
-    return schema
+  function applySchema(schema: DashboardSchema): void {
+    title.value = schema.title || '未命名大屏'
+    components.value = schema.components ?? []
+    assets.value = Array.isArray(schema.assets) ? schema.assets : []
+    selectedComponentId.value = null
+
+    restoreNextId(schema.components ?? [])
+    restoreNextAssetId(assets.value)
+
+    console.log(
+      `[editorStore] Schema 已应用，共 ${schema.components?.length ?? 0} 个组件，${assets.value.length} 个数据资产`
+    )
   }
 
-  /** 从 localStorage 加载 Schema，返回是否加载成功 */
-  function loadSchema(): boolean {
+  // ===================== API 持久化（全栈重构） =====================
+
+  /**
+   * loadTask(taskId) — 从后端加载任务数据并填充 Store
+   * GET /api/tasks/:id → 获取完整 Task（含 schema）
+   */
+  async function loadTask(taskId: string): Promise<boolean> {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (!raw) {
-        console.log('[editorStore] localStorage 中无已保存的 Schema')
+      const res = await fetch(`${API_BASE}/${taskId}`)
+      if (!res.ok) {
+        console.error(`[editorStore] 加载任务失败 HTTP ${res.status}`)
         return false
       }
 
-      const schema: DashboardSchema = JSON.parse(raw)
+      const task: Task = await res.json()
 
-      // 基础校验
-      if (!schema.components || !Array.isArray(schema.components)) {
-        console.warn('[editorStore] Schema 格式无效，已忽略')
+      if (!task.schema) {
+        console.warn('[editorStore] 任务数据中无 schema')
         return false
       }
 
-      title.value = schema.title || '未命名大屏'
-      components.value = schema.components
-      selectedComponentId.value = null
+      currentTaskId.value = task.id
+      applySchema(task.schema)
 
-      // 恢复 id 计数器
-      restoreNextId(schema.components)
-
-      console.log(`[editorStore] Schema 加载成功，共 ${schema.components.length} 个组件`)
+      console.log(`[editorStore] 任务已加载: ${task.id} — "${task.name}"`)
       return true
     } catch (err) {
-      console.error('[editorStore] 加载 Schema 失败：', err)
+      console.error('[editorStore] 加载任务异常:', err)
       return false
     }
   }
 
-  /** 清空画布所有组件（保留数据） */
+  /**
+   * saveTask() — 将当前 Schema 持久化到后端
+   * PUT /api/tasks/:id → 提交 currentSchema
+   */
+  async function saveTask(): Promise<boolean> {
+    const taskId = currentTaskId.value
+    if (!taskId) {
+      console.warn('[editorStore] 无 currentTaskId，无法保存')
+      return false
+    }
+
+    try {
+      const schema = currentSchema.value
+      schema.updatedAt = new Date().toISOString()
+
+      const res = await fetch(`${API_BASE}/${taskId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schema }),
+      })
+
+      if (!res.ok) {
+        console.error(`[editorStore] 保存任务失败 HTTP ${res.status}`)
+        return false
+      }
+
+      console.log('[editorStore] 任务已保存到后端')
+      return true
+    } catch (err) {
+      console.error('[editorStore] 保存任务异常:', err)
+      return false
+    }
+  }
+
+  /**
+   * saveSchema() — 兼容旧 API，内部委托给 saveTask()
+   * @deprecated 推荐使用 saveTask()
+   */
+  function saveSchema(): DashboardSchema {
+    const schema = currentSchema.value
+    schema.updatedAt = new Date().toISOString()
+    // 异步保存（fire-and-forget + 同步返回 schema 以兼容旧调用）
+    saveTask().catch((err) => console.error('[editorStore] saveSchema 异步保存失败:', err))
+    return schema
+  }
+
+  /**
+   * loadSchema() — 兼容旧 API，无 taskId 时无法工作
+   * @deprecated 推荐使用 loadTask(taskId)
+   */
+  function loadSchema(): boolean {
+    console.warn('[editorStore] loadSchema() 已废弃，请使用 loadTask(taskId)')
+    return false
+  }
+
   function clearCanvas(): void {
     components.value = []
     selectedComponentId.value = null
     console.log('[editorStore] 画布已清空')
   }
 
-  /** 重置整个编辑器（清空一切，包括 localStorage） */
   function resetAll(): void {
     title.value = '未命名大屏'
-    rawData.value = []
+    assets.value = []
     components.value = []
     selectedComponentId.value = null
     isFullscreenPreview.value = false
-    try {
-      localStorage.removeItem(STORAGE_KEY)
-    } catch (_) { /* ignore */ }
+    currentTaskId.value = null
+    _nextId = 1
+    _nextAssetId = 1
     console.log('[editorStore] 编辑器已完全重置')
   }
 
-  /** 切换全屏预览模式 */
   function toggleFullscreenPreview(): void {
     isFullscreenPreview.value = !isFullscreenPreview.value
   }
 
-  /** 设置大屏标题 */
   function setTitle(newTitle: string): void {
     title.value = newTitle
   }
@@ -341,8 +446,9 @@ export const useEditorStore = defineStore('editor', () => {
 
   return {
     // state
+    currentTaskId,
     title,
-    rawData,
+    assets,
     components,
     selectedComponentId,
     isFullscreenPreview,
@@ -354,7 +460,9 @@ export const useEditorStore = defineStore('editor', () => {
     selectedComponent,
     currentSchema,
     // actions
-    setRawData,
+    addAsset,
+    removeAsset,
+    getAssetById,
     addComponent,
     updateComponentPosition,
     selectComponent,
@@ -363,7 +471,10 @@ export const useEditorStore = defineStore('editor', () => {
     removeComponent,
     clearData,
     autoSelectFields,
-    // schema persistence
+    applySchema,
+    // persistence
+    loadTask,
+    saveTask,
     saveSchema,
     loadSchema,
     clearCanvas,
