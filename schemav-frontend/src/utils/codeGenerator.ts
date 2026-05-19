@@ -1,51 +1,46 @@
 /**
- * generateVueCode — 自动化出码引擎（Node 6 升级）
+ * generateVueCode — 自动化出码引擎（全局数据湖升级）
  *
  * 将 DashboardSchema 转换为可独立运行的 Vue SFC 代码字符串。
  *
  * 输出特点：
  * - <template>：绝对定位容器 + 按 zIndex 排序的图表组件
- * - <script setup>：自动 import vue-echarts、echarts 核心，以及每个组件的 merge 后的 Option
+ * - <script setup>：自动 import vue-echarts、echarts 核心，以及 merge 后的 option
  * - <style>：scoped 基础样式
  *
- * Node 6 升级：
- * - 从 schema.assets 中获取数据
- * - 将用到的 Asset 生成多个常量（如 const data_asset_1 = [...]）
- * - 图表 option 引用对应的数据变量
+ * 全局数据湖升级：
+ * - 从 schema.globalData 生成内联数据常量 const globalData = { ... }
+ * - 图表 option 引用 globalData[字段] 进行数据提取
+ * - 不再依赖 assets/assetId
  *
  * merge 逻辑与 ComponentWrapper 保持一致：
  * baseOption + JSON.parse(customOption) → lodash merge
  */
-import type { DashboardSchema, ComponentInstance, ChartSchema, DataAsset } from '../stores/editorStore'
+import type { DashboardSchema, ComponentInstance, ChartSchema } from '../stores/editorStore'
 
 /**
- * 将资产数据序列化为内联 JSON
+ * 将 globalData 序列化为内联 JSON 常量
  */
-function serializeAssetData(asset: DataAsset): string {
+function serializeGlobalData(data: Record<string, any> | null): string {
+  if (!data) return 'null'
   try {
-    return JSON.stringify(asset.data, null, 2)
+    return JSON.stringify(data, null, 2)
   } catch {
-    return '[]'
+    return 'null'
   }
 }
 
 /**
  * 为单个图表组件构建 merge 后的 ECharts Option 代码字符串
- *
- * @param comp - 组件实例
- * @param varNameMap - assetId → 变量名 的映射（如 { 'asset-1': 'data_asset_1' }）
+ * 数据从 globalData[字段] 中提取
  */
-function buildChartOptionCode(
-  comp: ComponentInstance,
-  varNameMap: Map<string, string>,
-): string {
+function buildChartOptionCode(comp: ComponentInstance): string {
   const schema = comp.props.chartSchema as ChartSchema | undefined
-  if (!schema || !schema.xAxisField || !schema.yAxisField || !schema.assetId) {
+  if (!schema || !schema.xAxisField || !schema.yAxisField) {
     return '{}'
   }
 
-  const { xAxisField, yAxisField, chartType, assetId } = schema
-  const dataVarName = varNameMap.get(assetId) ?? 'data'
+  const { xAxisField, yAxisField, chartType } = schema
 
   // 基础配置 — 与 ComponentWrapper 中的 baseOption 保持一致
   const baseOptionLines: string[] = [
@@ -60,15 +55,15 @@ function buildChartOptionCode(
     `  grid: { left: '5%', right: '5%', top: 48, bottom: 48, containLabel: true },`,
     `  xAxis: {`,
     `    type: 'category',`,
-    `    data: ${dataVarName}.map(item => String(item['${xAxisField}'] ?? '')),`,
-    `    axisLabel: { rotate: ${dataVarName}.length > 8 ? 30 : 0, fontSize: 11 },`,
+    `    data: (Array.isArray(globalData['${xAxisField}']) ? globalData['${xAxisField}'] : [globalData['${xAxisField}']]).map(item => String(item ?? '')),`,
+    `    axisLabel: { rotate: globalData['${xAxisField}']?.length > 8 ? 30 : 0, fontSize: 11 },`,
     `  },`,
     `  yAxis: { type: 'value', name: '${yAxisField}' },`,
     `  series: [{`,
     `    name: '${yAxisField}',`,
     `    type: '${chartType}',`,
-    `    data: ${dataVarName}.map(item => {`,
-    `      const val = Number(item['${yAxisField}'])`,
+    `    data: (Array.isArray(globalData['${yAxisField}']) ? globalData['${yAxisField}'] : [globalData['${yAxisField}']]).map(item => {`,
+    `      const val = Number(item)`,
     `      return Number.isNaN(val) ? 0 : val`,
     `    }),`,
     `    emphasis: { focus: 'series' },`,
@@ -99,30 +94,13 @@ function buildChartOptionCode(
 /**
  * 生成完整的 .vue 单文件组件代码
  *
- * @param schema - 大屏 Schema（包含 assets、components）
+ * @param schema - 大屏 Schema（包含 globalData、components）
  */
 export function generateVueCode(schema: DashboardSchema): string {
-  const { title, canvas, components, assets } = schema
+  const { title, canvas, components, globalData } = schema
 
   // 按 zIndex 排序，确保渲染顺序正确
   const sorted = [...components].sort((a, b) => a.zIndex - b.zIndex)
-
-  // 构建资产 ID → 变量名映射
-  const usedAssetIds = new Set<string>()
-  sorted.forEach((comp) => {
-    const cs = comp.props.chartSchema as ChartSchema | undefined
-    if (cs?.assetId) usedAssetIds.add(cs.assetId)
-  })
-
-  const varNameMap = new Map<string, string>()
-  let assetIdx = 1
-  usedAssetIds.forEach((id) => {
-    varNameMap.set(id, `data_asset_${assetIdx}`)
-    assetIdx++
-  })
-
-  // 仅序列化被用到的资产
-  const usedAssets = assets.filter((a) => usedAssetIds.has(a.id))
 
   // 判断是否需要 lodash merge
   const hasCustomOption = sorted.some((c) => {
@@ -204,19 +182,15 @@ export function generateVueCode(schema: DashboardSchema): string {
     scriptLines.push(``)
   }
 
-  // 数据资产常量（Node 6 升级：每个资产一个常量）
-  scriptLines.push(`// 数据资产（由编辑器探针抓取并清洗入库）`)
-  usedAssets.forEach((asset) => {
-    const varName = varNameMap.get(asset.id) ?? 'data'
-    const dataJson = serializeAssetData(asset)
-    scriptLines.push(`const ${varName} = ${dataJson}`)
-    scriptLines.push(``)
-  })
+  // 全局数据常量
+  scriptLines.push(`// 全局数据（由探针抓取并清洗入库）`)
+  scriptLines.push(`const globalData = ${serializeGlobalData(globalData)}`)
+  scriptLines.push(``)
 
   // 每个组件的 Option
   sorted.forEach((comp) => {
     const varName = `chartOption_${comp.id.replace(/-/g, '_')}`
-    scriptLines.push(`const ${varName} = ${buildChartOptionCode(comp, varNameMap)}`)
+    scriptLines.push(`const ${varName} = ${buildChartOptionCode(comp)}`)
     scriptLines.push(``)
   })
 

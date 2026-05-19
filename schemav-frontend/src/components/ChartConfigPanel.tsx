@@ -3,18 +3,18 @@ import { useEditorStore, type ChartSchema } from '../stores/editorStore'
 import { debounce } from 'lodash-es'
 
 /**
- * ChartConfigPanel — 图表配置面板（Node 6 升级）
+ * ChartConfigPanel — 图表配置面板（全局数据湖升级）
  *
  * 四段式布局：
  * 1. 危险操作区 — 删除选中的图表组件
- * 2. 数据绑定区 — 选择数据资产（assetId），动态决定可用字段
- * 3. 基础配置区 — 图表类型、X/Y 轴字段选择
+ * 2. 数据映射区 — 展示 globalData 状态，图表直接绑定 X/Y 轴字段
+ * 3. 基础配置区 — 图表类型、X/Y 轴字段选择（字段来自 globalData 顶层 keys）
  * 4. 深度配置区 — ECharts JSON 编辑器，支持实时校验与双向同步
  *
- * Node 6 升级：
- * - 顶部新增资产绑定 <el-select>
- * - X/Y 轴字段根据绑定的 assetId 动态计算
- * - 未绑定资产时提示用户
+ * 全局数据湖升级：
+ * - 移除 assetId 绑定下拉框，图表直接使用 globalData
+ * - X/Y 轴字段从 globalData 顶层 keys 中选取
+ * - 只要 globalData 已挂载即可配置
  */
 export default defineComponent({
   name: 'ChartConfigPanel',
@@ -113,13 +113,6 @@ export default defineComponent({
       debouncedValidateAndCommit(val)
     }
 
-    // ==================== 资产绑定处理 ====================
-
-    const onAssetChange = (val: string | number | boolean) => {
-      const assetId = String(val)
-      store.updateChartSchema({ assetId: assetId || undefined, xAxisField: '', yAxisField: '' })
-    }
-
     // ==================== 基础配置处理 ====================
 
     const onChartTypeChange = (val: string | number | boolean) => {
@@ -166,7 +159,7 @@ export default defineComponent({
               点击画布上的组件进行配置
             </div>
             <div style={{ fontSize: '12px', color: '#c0c4cc' }}>
-              或先在左侧探针面板获取数据并创建资产
+              或先在左侧探针面板初始化全局数据
             </div>
           </div>
         ) : (
@@ -199,7 +192,7 @@ export default defineComponent({
               </div>
             </div>
 
-            {/* ==================== 数据绑定区（Node 6 新增） ==================== */}
+            {/* ==================== 数据映射区 ==================== */}
             <div style={{
               marginBottom: '16px',
               padding: '12px',
@@ -207,36 +200,26 @@ export default defineComponent({
               borderRadius: '6px',
               border: '1px solid #d9ecff',
             }}>
-              <div style={{ fontSize: '13px', fontWeight: 600, color: '#409eff', marginBottom: '12px' }}>
-                🔗 数据绑定
+              <div style={{ fontSize: '13px', fontWeight: 600, color: '#409eff', marginBottom: '8px' }}>
+                🌐 全局数据映射
               </div>
-              <el-form label-position="top" size="default">
-                <el-form-item label="绑定数据资产">
-                  <el-select
-                    model-value={schema.value.assetId ?? ''}
-                    onUpdate:model-value={onAssetChange}
-                    placeholder="选择数据资产"
-                    style={{ width: '100%' }}
-                    clearable
-                  >
-                    {store.assets.map((asset) => (
-                      <el-option
-                        key={asset.id}
-                        label={`${asset.name} (${asset.data.length}条)`}
-                        value={asset.id}
-                      />
-                    ))}
-                  </el-select>
-                </el-form-item>
-              </el-form>
-              {!schema.value.assetId && (
+              {store.globalData === null ? (
                 <el-alert
-                  title="请先在左侧探针面板创建数据资产"
+                  title="尚未初始化全局数据"
                   type="warning"
+                  description="请先在左侧面板点击「初始化全局数据」按钮，通过超级探针获取数据"
                   show-icon
                   closable={false}
-                  style={{ marginTop: '8px' }}
                 />
+              ) : (
+                <div style={{ fontSize: '12px', color: '#606266', lineHeight: '1.6' }}>
+                  <span style={{ color: '#67c23a', fontWeight: 600 }}>✅ 全局数据已挂载</span>
+                  <div style={{ marginTop: '4px' }}>
+                    可用字段：{store.availableFields.length > 0
+                      ? store.availableFields.join(', ')
+                      : '(无顶层字段)'}
+                  </div>
+                </div>
               )}
             </div>
 
@@ -262,15 +245,15 @@ export default defineComponent({
                   </el-radio-group>
                 </el-form-item>
 
-                {/* X 轴字段 — 根据资产动态计算 */}
+                {/* X 轴字段 — 从 globalData 顶层 keys 中选取 */}
                 <el-form-item label="X 轴 (维度)">
                   <el-select
                     model-value={schema.value.xAxisField}
                     onUpdate:model-value={onXFieldChange}
-                    placeholder={schema.value.assetId ? '选择分类 / 维度字段' : '请先绑定数据资产'}
+                    placeholder={store.globalData ? '选择分类 / 维度字段' : '请先初始化全局数据'}
                     style={{ width: '100%' }}
                     clearable
-                    disabled={!schema.value.assetId}
+                    disabled={!store.globalData}
                   >
                     {store.availableFields.map((field) => (
                       <el-option key={field} label={field} value={field} />
@@ -278,15 +261,15 @@ export default defineComponent({
                   </el-select>
                 </el-form-item>
 
-                {/* Y 轴字段 — 根据资产动态计算 */}
+                {/* Y 轴字段 — 从 globalData 顶层 keys 中选取 */}
                 <el-form-item label="Y 轴 (指标)">
                   <el-select
                     model-value={schema.value.yAxisField}
                     onUpdate:model-value={onYFieldChange}
-                    placeholder={schema.value.assetId ? '选择数据 / 指标字段' : '请先绑定数据资产'}
+                    placeholder={store.globalData ? '选择数据 / 指标字段' : '请先初始化全局数据'}
                     style={{ width: '100%' }}
                     clearable
-                    disabled={!schema.value.assetId}
+                    disabled={!store.globalData}
                   >
                     {store.availableFields.map((field) => (
                       <el-option key={field} label={field} value={field} />
@@ -296,7 +279,7 @@ export default defineComponent({
               </el-form>
             </div>
 
-            {/* ==================== 深度配置区（Node 5 升级：实时校验+双向同步） ==================== */}
+            {/* ==================== 深度配置区（实时校验+双向同步） ==================== */}
             <div style={{
               marginBottom: '16px',
               padding: '12px',
@@ -401,32 +384,22 @@ export default defineComponent({
               <div>类型：<strong style={{ color: '#409eff' }}>{
                 schema.value.chartType === 'bar' ? '柱状图' : '折线图'
               }</strong></div>
-              <div>资产：<strong style={{ color: '#409eff' }}>{
-                schema.value.assetId
-                  ? (store.assets.find((a) => a.id === schema.value.assetId)?.name ?? schema.value.assetId)
-                  : '(未绑定)'
-              }</strong></div>
               <div>X 轴：<strong style={{ color: '#409eff' }}>{
                 schema.value.xAxisField || '(未选择)'
               }</strong></div>
               <div>Y 轴：<strong style={{ color: '#409eff' }}>{
                 schema.value.yAxisField || '(未选择)'
               }</strong></div>
-              <div style={{ marginTop: '4px', paddingTop: '4px', borderTop: '1px dashed #dcdfe6' }}>
-                可用字段：{store.availableFields.length > 0
-                  ? store.availableFields.join(', ')
-                  : '(请绑定数据资产)'}
-              </div>
             </div>
           </>
         )}
 
-        {/* 无资产提示 */}
-        {store.assets.length === 0 && (
+        {/* 无全局数据提示 */}
+        {store.globalData === null && store.selectedComponent && (
           <el-alert
-            title="暂无数据资产"
+            title="尚未初始化全局数据"
             type="info"
-            description="请先在左侧探针面板获取数据并创建数据资产"
+            description="请先在左侧面板点击「初始化全局数据」按钮以获取数据"
             show-icon
             closable={false}
             style={{ marginTop: '16px' }}

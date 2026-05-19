@@ -4,7 +4,7 @@ import { useEditorStore, type ComponentInstance, type ChartSchema } from '../sto
 import VChart from 'vue-echarts'
 
 /**
- * ComponentWrapper — 高阶包装组件（Node 6 升级）
+ * ComponentWrapper — 高阶包装组件（全局数据湖升级）
  *
  * 职责：
  * 1. 为每个 ComponentInstance 生成绝对定位的容器
@@ -12,9 +12,10 @@ import VChart from 'vue-echarts'
  * 3. 选中态：蓝色边框 + 8 个缩放手柄
  * 4. Z-Index 管理 + 事件冒泡阻止
  *
- * Node 6 升级：
- * - chartOption 从 store.assets 中查找绑定资产的数据
- * - 未绑定 assetId 时显示引导提示
+ * 全局数据湖升级：
+ * - chartOption 直接从 store.globalData 读取数据
+ * - xAxisField / yAxisField 对应 globalData 的顶层 key
+ * - 值必须为数组或可转为数组
  */
 
 // 缩放手柄的类型定义
@@ -73,27 +74,32 @@ export default defineComponent({
 
     const chartRef = ref<InstanceType<typeof VChart> | null>(null)
 
-    // ===================== ECharts Option（Node 6：从 assets 读取数据） =====================
+    // ===================== ECharts Option（全局数据湖：从 globalData 读取数据） =====================
 
     /** 图表未就绪的原因枚举（null = 已就绪） */
     const chartBlockReason = computed<string | null>(() => {
       const schema = props.component.props.chartSchema as ChartSchema | undefined
 
-      if (!schema || !schema.xAxisField || !schema.yAxisField || !schema.assetId) {
+      if (!schema || !schema.xAxisField || !schema.yAxisField) {
         return 'no_binding'
       }
 
-      const asset = store.assets.find((a) => a.id === schema.assetId)
-      if (!asset || !asset.data) {
-        return 'no_asset'
+      if (!store.globalData) {
+        return 'no_global_data'
       }
 
-      // 🛡️ 数据湖防崩溃兜底：如果 data 不是 Array，ECharts 无法消费
-      if (!Array.isArray(asset.data)) {
-        return 'complex_object'
+      const xVal = store.globalData[schema.xAxisField]
+      const yVal = store.globalData[schema.yAxisField]
+
+      if (xVal === undefined || yVal === undefined) {
+        return 'field_not_found'
       }
 
-      if (asset.data.length === 0) {
+      // 检查是否至少有一个是数组
+      const xArr = Array.isArray(xVal) ? xVal : [xVal]
+      const yArr = Array.isArray(yVal) ? yVal : [yVal]
+
+      if (xArr.length === 0 && yArr.length === 0) {
         return 'empty'
       }
 
@@ -108,10 +114,15 @@ export default defineComponent({
       const schema = props.component.props.chartSchema as ChartSchema | undefined
       if (!schema) return null
 
-      const asset = store.assets.find((a) => a.id === schema.assetId)
-      if (!asset || !Array.isArray(asset.data)) return null
-
+      const gd = store.globalData!
       const { xAxisField, yAxisField, chartType } = schema
+
+      const xRaw = gd[xAxisField]
+      const yRaw = gd[yAxisField]
+
+      // 标准化为数组
+      const xData: any[] = Array.isArray(xRaw) ? xRaw : [xRaw]
+      const yData: any[] = Array.isArray(yRaw) ? yRaw : [yRaw]
 
       // 基础图表配置
       const baseOption = {
@@ -141,11 +152,9 @@ export default defineComponent({
         },
         xAxis: {
           type: 'category' as const,
-          data: asset.data.map((item) =>
-            String(item[xAxisField] ?? ''),
-          ),
+          data: xData.map((item) => String(item ?? '')),
           axisLabel: {
-            rotate: asset.data.length > 8 ? 30 : 0,
+            rotate: xData.length > 8 ? 30 : 0,
             fontSize: 11,
           },
         },
@@ -157,8 +166,8 @@ export default defineComponent({
           {
             name: yAxisField,
             type: chartType,
-            data: asset.data.map((item) => {
-              const val = Number(item[yAxisField])
+            data: yData.map((item) => {
+              const val = Number(item)
               return Number.isNaN(val) ? 0 : val
             }),
             emphasis: {
@@ -435,11 +444,13 @@ export default defineComponent({
                 >
                   <span>📊 图表组件</span>
                   <span style={{ fontSize: '12px', textAlign: 'center', padding: '0 16px' }}>
-                    {chartBlockReason.value === 'complex_object'
-                      ? '数据格式为复杂对象，请等待右侧数据映射器配置'
-                      : store.assets.length === 0
-                        ? '请先在左侧资产超市添加数据资产'
-                        : '请在右侧配置面板绑定数据资产'}
+                    {chartBlockReason.value === 'no_global_data'
+                      ? '请先在左侧初始化全局数据'
+                      : chartBlockReason.value === 'field_not_found'
+                        ? '全局数据中未找到对应字段'
+                        : chartBlockReason.value === 'no_binding'
+                          ? '请在右侧配置面板绑定 X/Y 轴字段'
+                          : '请检查数据绑定配置'}
                   </span>
                 </div>
               )

@@ -1,25 +1,16 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { merge } from 'lodash-es'
 
 // ============================================================
 // 接口定义
 // ============================================================
-
-/** 数据资产 - 数据湖架构：直接全量存储后端返回的复杂对象或用户粘贴的 JSON */
-export interface DataAsset {
-  id: string
-  name: string
-  fields: string[]
-  data: any
-}
 
 /** 图表配置 Schema（嵌入在 ComponentInstance.props 中） */
 export interface ChartSchema {
   chartType: 'bar' | 'line'
   xAxisField: string
   yAxisField: string
-  /** 绑定的数据资产 ID */
-  assetId?: string
   /** ECharts 深度自定义 JSON 配置 */
   customOption?: string
 }
@@ -51,7 +42,7 @@ export interface DashboardSchema {
     background: string
   }
   components: ComponentInstance[]
-  assets: DataAsset[]
+  globalData: Record<string, any> | null
   createdAt: string
   updatedAt: string
 }
@@ -72,14 +63,9 @@ export interface Task {
 // ============================================================
 
 let _nextId = 1
-let _nextAssetId = 1
 
 function generateId(): string {
   return `comp-${_nextId++}`
-}
-
-function generateAssetId(): string {
-  return `asset-${_nextAssetId++}`
 }
 
 /** 恢复组件 id 计数器 */
@@ -89,15 +75,6 @@ function restoreNextId(components: ComponentInstance[]): void {
     return match ? Math.max(max, parseInt(match[1], 10)) : max
   }, 0)
   _nextId = maxNum + 1
-}
-
-/** 恢复资产 id 计数器 */
-function restoreNextAssetId(assets: DataAsset[]): void {
-  const maxNum = assets.reduce((max, a) => {
-    const match = a.id.match(/^asset-(\d+)$/)
-    return match ? Math.max(max, parseInt(match[1], 10)) : max
-  }, 0)
-  _nextAssetId = maxNum + 1
 }
 
 const API_BASE = '/api/tasks'
@@ -115,8 +92,8 @@ export const useEditorStore = defineStore('editor', () => {
   /** 大屏标题 */
   const title = ref('未命名大屏')
 
-  /** 数据资产列表 */
-  const assets = ref<DataAsset[]>([])
+  /** 🔥 全局单一数据湖 — 当前大屏的唯一数据基座 */
+  const globalData = ref<Record<string, any> | null>(null)
 
   /** 画布上的所有组件实例 */
   const components = ref<ComponentInstance[]>([])
@@ -129,15 +106,13 @@ export const useEditorStore = defineStore('editor', () => {
 
   // ===================== Getters =====================
 
-  const hasData = computed(() => assets.value.length > 0)
+  /** 全局数据是否已挂载 */
+  const hasData = computed(() => globalData.value !== null)
 
+  /** 从 globalData 顶层 keys 推导可用字段 */
   const availableFields = computed<string[]>(() => {
-    const comp = selectedComponent.value
-    if (!comp) return []
-    const schema = comp.props.chartSchema as ChartSchema | undefined
-    if (!schema?.assetId) return []
-    const asset = assets.value.find((a) => a.id === schema.assetId)
-    return asset?.fields ?? []
+    if (!globalData.value) return []
+    return Object.keys(globalData.value)
   })
 
   const selectedComponent = computed<ComponentInstance | null>(() => {
@@ -157,7 +132,6 @@ export const useEditorStore = defineStore('editor', () => {
   const isChartReady = computed(() => {
     const cs = chartSchema.value
     return (
-      !!cs.assetId &&
       cs.xAxisField !== '' &&
       cs.yAxisField !== ''
     )
@@ -175,7 +149,7 @@ export const useEditorStore = defineStore('editor', () => {
         background: '#f0f2f5',
       },
       components: components.value,
-      assets: assets.value,
+      globalData: globalData.value,
       createdAt: now,
       updatedAt: now,
     }
@@ -183,36 +157,20 @@ export const useEditorStore = defineStore('editor', () => {
 
   // ===================== Actions =====================
 
-  function addAsset(asset: DataAsset): void {
-    const id = asset.id || generateAssetId()
-    const entry: DataAsset = { ...asset, id }
-    const existingIdx = assets.value.findIndex((a) => a.id === id)
-    if (existingIdx !== -1) {
-      assets.value[existingIdx] = entry
+  /** 🔥 增量合并全局数据 — 使用 lodash-es merge 深度合并 */
+  function mergeGlobalData(data: Record<string, any>): void {
+    if (globalData.value === null) {
+      globalData.value = data
     } else {
-      assets.value.push(entry)
+      globalData.value = merge({}, globalData.value, data) as Record<string, any>
     }
+    console.log('[editorStore] 全局数据已合并，顶层 keys:', Object.keys(globalData.value!).join(', '))
   }
 
-  function removeAsset(assetId: string): void {
-    const idx = assets.value.findIndex((a) => a.id === assetId)
-    if (idx === -1) return
-    assets.value.splice(idx, 1)
-    components.value.forEach((comp) => {
-      const schema = comp.props.chartSchema as ChartSchema | undefined
-      if (schema?.assetId === assetId) {
-        comp.props.chartSchema = {
-          ...(schema ?? { chartType: 'bar', xAxisField: '', yAxisField: '' }),
-          assetId: undefined,
-          xAxisField: '',
-          yAxisField: '',
-        }
-      }
-    })
-  }
-
-  function getAssetById(assetId: string): DataAsset | undefined {
-    return assets.value.find((a) => a.id === assetId)
+  /** 🔥 全量替换全局数据 — 完全覆盖现有数据 */
+  function replaceGlobalData(data: Record<string, any>): void {
+    globalData.value = data
+    console.log('[editorStore] 全局数据已替换，顶层 keys:', Object.keys(data).join(', '))
   }
 
   function addComponent(type: string, defaultProps?: Record<string, unknown>) {
@@ -284,7 +242,7 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function clearData() {
-    assets.value = []
+    globalData.value = null
     components.value = []
     selectedComponentId.value = null
   }
@@ -317,14 +275,13 @@ export const useEditorStore = defineStore('editor', () => {
   function applySchema(schema: DashboardSchema): void {
     title.value = schema.title || '未命名大屏'
     components.value = schema.components ?? []
-    assets.value = Array.isArray(schema.assets) ? schema.assets : []
+    globalData.value = schema.globalData ?? null
     selectedComponentId.value = null
 
     restoreNextId(schema.components ?? [])
-    restoreNextAssetId(assets.value)
 
     console.log(
-      `[editorStore] Schema 已应用，共 ${schema.components?.length ?? 0} 个组件，${assets.value.length} 个数据资产`
+      `[editorStore] Schema 已应用，共 ${schema.components?.length ?? 0} 个组件，globalData: ${globalData.value ? '已挂载' : '空'}`
     )
   }
 
@@ -423,13 +380,12 @@ export const useEditorStore = defineStore('editor', () => {
 
   function resetAll(): void {
     title.value = '未命名大屏'
-    assets.value = []
+    globalData.value = null
     components.value = []
     selectedComponentId.value = null
     isFullscreenPreview.value = false
     currentTaskId.value = null
     _nextId = 1
-    _nextAssetId = 1
     console.log('[editorStore] 编辑器已完全重置')
   }
 
@@ -447,7 +403,7 @@ export const useEditorStore = defineStore('editor', () => {
     // state
     currentTaskId,
     title,
-    assets,
+    globalData,
     components,
     selectedComponentId,
     isFullscreenPreview,
@@ -459,9 +415,8 @@ export const useEditorStore = defineStore('editor', () => {
     selectedComponent,
     currentSchema,
     // actions
-    addAsset,
-    removeAsset,
-    getAssetById,
+    mergeGlobalData,
+    replaceGlobalData,
     addComponent,
     updateComponentPosition,
     selectComponent,

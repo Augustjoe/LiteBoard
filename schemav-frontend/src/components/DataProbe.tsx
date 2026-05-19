@@ -1,31 +1,36 @@
-import { defineComponent, ref, watch, type PropType } from 'vue'
-import { useEditorStore, type DataAsset } from '../stores/editorStore'
+import { defineComponent, ref, watch, type PropType, nextTick, computed } from 'vue'
+import { useEditorStore } from '../stores/editorStore'
+import { ElMessage } from 'element-plus'
+import { Codemirror } from 'vue-codemirror'
+import { json } from '@codemirror/lang-json'
+import { javascript } from '@codemirror/lang-javascript'
+import { oneDark } from '@codemirror/theme-one-dark'
+import type { EditorView as CMEditorView } from '@codemirror/view'
 
 /**
- * DataProbe — 双模超级探针弹窗（数据湖改造）
+ * DataProbe — 超级探针弹窗（v2：上下分栏一站式）
  *
- * 作为 el-dialog 弹窗形式嵌入 EditorView，分为两个页签：
- * 1. 📡 远程获取：URL + Method + Headers + Body → 通过 Node 中转层 /api/probe 代理请求
- * 2. ✍️ 手动添加：粘贴 JSON → JSON.parse 校验后入库
- *
- * 统一入库：用户输入【资产名称】→ 将原始数据原封不动作为 data 包装成 DataAsset
+ * 设计理念：
+ * - 取消分步，上下分栏布局
+ * - 上半区：输入源（远程获取 / 手动粘贴，手动粘贴使用 vue-codemirror JSON）
+ * - 下半区：数据预览与过滤（原始数据只读 + JS 过滤器）
+ * - 执行成功后调用 store.mergeGlobalData() 增量合并
  */
+
+/** 默认 JS 过滤器代码 */
+const DEFAULT_FILTER_CODE = `// 请编写 JS 代码清洗数据。原始数据变量为 res，必须 return 一个纯对象 (Object)。
+// 示例：return { ...res };
+return { ...res };`
+
 export default defineComponent({
   name: 'DataProbe',
   props: {
-    /** 弹窗是否可见 */
     visible: {
       type: Boolean,
       required: true,
     },
-    /** 关闭弹窗回调 */
     onClose: {
       type: Function as PropType<() => void>,
-      required: true,
-    },
-    /** 保存资产成功后的回调（传递新建的 DataAsset） */
-    onSaved: {
-      type: Function as PropType<(asset: DataAsset) => void>,
       required: true,
     },
   },
@@ -46,51 +51,76 @@ export default defineComponent({
     const manualJson = ref('')
     const manualError = ref<string | null>(null)
 
-    // ==================== 共同：资产名称 ====================
-    const assetName = ref('')
+    // ==================== 原始数据（获取成功后暂存） ====================
+    const rawData = ref<unknown>(null)
+    const rawDataJson = computed(() => {
+      if (rawData.value === null) return ''
+      return JSON.stringify(rawData.value, null, 2)
+    })
 
-    /** 添加一行 Header Key-Value */
+    // ==================== 🧹 JS 过滤器 状态 ====================
+    const filterCode = ref(DEFAULT_FILTER_CODE)
+    const filterError = ref<string | null>(null)
+    const executing = ref(false)
+
+    // ==================== CodeMirror 视图引用（用于格式化） ====================
+    let manualEditorView: CMEditorView | null = null
+
+    /** CodeMirror ready 回调 — vue-codemirror 的 onReady 传递 { view, state, container } */
+    const onManualReady = (payload: { view: CMEditorView; state: any; container: HTMLDivElement }) => {
+      manualEditorView = payload.view
+    }
+
+    // ==================== CodeMirror 扩展 ====================
+    const jsonExtension = json()
+    const jsExtension = javascript()
+    const themeExtension = oneDark
+
+    /** 格式化手动输入的 JSON */
+    const formatManualJson = () => {
+      try {
+        const parsed = JSON.parse(manualJson.value)
+        manualJson.value = JSON.stringify(parsed, null, 2)
+        manualError.value = null
+      } catch (err) {
+        manualError.value = 'JSON 格式错误，无法格式化: ' + (err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    // ==================== 添加/删除 Header ====================
     const addHeader = () => {
       headerPairs.value.push({ key: '', value: '' })
     }
-
-    /** 删除指定 Header 行 */
     const removeHeader = (index: number) => {
       headerPairs.value.splice(index, 1)
     }
 
-    /** 发送远程探针 */
+    // ==================== 发送远程探针 ====================
     const sendRemoteProbe = async () => {
       remoteLoading.value = true
       remoteError.value = null
       remoteResult.value = null
+      rawData.value = null
 
       try {
-        // 组装 headers
         const headers: Record<string, string> = {}
         for (const pair of headerPairs.value) {
           const k = pair.key.trim()
-          if (k) {
-            headers[k] = pair.value
-          }
+          if (k) headers[k] = pair.value
         }
 
         const payload: Record<string, unknown> = {
           targetUrl: targetUrl.value,
           method: method.value,
         }
-        if (Object.keys(headers).length > 0) {
-          payload.headers = headers
-        }
+        if (Object.keys(headers).length > 0) payload.headers = headers
         if (method.value === 'POST' && requestBody.value.trim()) {
           payload.body = requestBody.value.trim()
         }
 
         const response = await fetch('http://localhost:3000/api/probe', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         })
 
@@ -101,6 +131,7 @@ export default defineComponent({
 
         const data = await response.json()
         remoteResult.value = data
+        rawData.value = data
       } catch (err) {
         remoteError.value = err instanceof Error ? err.message : String(err)
         console.error('[DataProbe] 远程探针请求失败:', err)
@@ -109,38 +140,8 @@ export default defineComponent({
       }
     }
 
-    /** 保存资产（统一入库入口） */
-    const onSaveAsset = (rawData: unknown) => {
-      const name = assetName.value.trim() || `数据资产_${store.assets.length + 1}`
-
-      // 提取 fields：如果 rawData 是数组且元素为对象，合并所有 key
-      let fields: string[] = []
-      if (Array.isArray(rawData)) {
-        const keySet = new Set<string>()
-        ;(rawData as unknown[]).forEach((item) => {
-          if (typeof item === 'object' && item !== null) {
-            Object.keys(item as Record<string, unknown>).forEach((k) => keySet.add(k))
-          }
-        })
-        fields = Array.from(keySet)
-      } else if (typeof rawData === 'object' && rawData !== null) {
-        fields = Object.keys(rawData as Record<string, unknown>)
-      }
-
-      const assetId = `asset-${Date.now()}`
-
-      props.onSaved({
-        id: assetId,
-        name,
-        fields,
-        data: rawData,
-      })
-
-      console.log(`[DataProbe] 数据资产 "${name}" 已入库`)
-    }
-
-    /** 手动模式：JSON.parse 校验 + 保存 */
-    const onSaveManual = () => {
+    // ==================== 手动模式：校验 JSON 并设置原始数据 ====================
+    const onParseManual = () => {
       manualError.value = null
 
       if (!manualJson.value.trim()) {
@@ -161,27 +162,60 @@ export default defineComponent({
         return
       }
 
-      onSaveAsset(parsed)
+      rawData.value = parsed
+      manualError.value = null
     }
 
-    /** 远程模式：从探针结果保存 */
-    const onSaveRemote = () => {
-      remoteError.value = null
+    // ==================== 执行 JS 过滤器并合并到全局数据 ====================
+    const executeAndMerge = async () => {
+      filterError.value = null
+      executing.value = true
 
-      if (!remoteResult.value) {
-        remoteError.value = '请先成功获取远程数据'
-        return
+      try {
+        // 延迟一下让 loading 状态可见
+        await nextTick()
+
+        if (rawData.value === null) {
+          filterError.value = '无可用的原始数据，请先在【远程获取】或【手动添加】中获取数据'
+          return
+        }
+
+        let result: unknown
+        try {
+          const fn = new Function('res', filterCode.value)
+          result = fn(rawData.value)
+        } catch (err) {
+          filterError.value = '代码执行异常: ' + (err instanceof Error ? err.message : String(err))
+          return
+        }
+
+        // 强校验：返回值必须是纯对象
+        if (typeof result !== 'object' || result === null || Array.isArray(result)) {
+          const typeLabel = Array.isArray(result) ? 'Array' : (result === null ? 'null' : typeof result)
+          ElMessage({
+            message: `返回结果必须是 <strong>Object</strong> 类型，不能是 <strong>${typeLabel}</strong>`,
+            dangerouslyUseHTMLString: true,
+            type: 'error',
+            duration: 5000,
+          })
+          filterError.value = `返回值必须是纯对象格式 (Plain Object)，不能是 ${typeLabel}！`
+          return
+        }
+
+        // 校验通过，增量合并
+        store.mergeGlobalData(result as Record<string, any>)
+        ElMessage.success('数据已成功合并至全局数据')
+        props.onClose()
+      } finally {
+        executing.value = false
       }
-
-      onSaveAsset(remoteResult.value)
     }
 
-    // ==================== 弹窗关闭时重置状态 ====================
+    // ==================== 弹窗打开时重置状态 ====================
     watch(
       () => props.visible,
       (isVisible) => {
         if (isVisible) {
-          // 打开时重置
           activeTab.value = 'remote'
           targetUrl.value = 'http://localhost:3000/api/mock-chart-data'
           method.value = 'GET'
@@ -192,7 +226,10 @@ export default defineComponent({
           remoteResult.value = null
           manualJson.value = ''
           manualError.value = null
-          assetName.value = ''
+          rawData.value = null
+          filterCode.value = DEFAULT_FILTER_CODE
+          filterError.value = null
+          executing.value = false
         }
       },
     )
@@ -201,197 +238,310 @@ export default defineComponent({
       <el-dialog
         model-value={props.visible}
         onUpdate:model-value={(val: boolean) => { if (!val) props.onClose() }}
-        title="🔍 添加数据资产"
-        width="680px"
-        top="8vh"
+        title="🔍 超级探针 — 数据获取与过滤"
+        width="900px"
+        top="3vh"
         destroy-on-close
         close-on-click-modal={false}
+        class="data-probe-dialog data-probe-dialog--v2"
       >
-        <el-tabs model-value={activeTab.value} onUpdate:model-value={(v: string) => { activeTab.value = v }}>
-          {/* ==================== 页签 1：📡 远程获取 ==================== */}
-          <el-tab-pane label="📡 远程获取" name="remote">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              {/* URL + Method */}
-              <div style={{ display: 'flex', gap: '10px' }}>
-                <el-select
-                  model-value={method.value}
-                  onUpdate:model-value={(v: 'GET' | 'POST') => { method.value = v }}
-                  style={{ width: '110px' }}
-                >
-                  <el-option label="GET" value="GET" />
-                  <el-option label="POST" value="POST" />
-                </el-select>
-                <el-input
-                  model-value={targetUrl.value}
-                  onUpdate:model-value={(v: string) => { targetUrl.value = v }}
-                  placeholder="输入目标 URL"
-                  style={{ flex: 1 }}
-                />
-              </div>
+        <div class="probe-layout">
+          {/* ==================== 上半区：输入源 ==================== */}
+          <div class="probe-section probe-section--input">
+            <div class="probe-section__title">📥 输入源</div>
+            <el-tabs
+              model-value={activeTab.value}
+              onUpdate:model-value={(v: string) => { activeTab.value = v }}
+              class="probe-tabs"
+            >
+              {/* ---- 📡 远程获取 ---- */}
+              <el-tab-pane label="📡 远程获取" name="remote">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {/* URL + Method */}
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <el-select
+                      model-value={method.value}
+                      onUpdate:model-value={(v: 'GET' | 'POST') => { method.value = v }}
+                      style={{ width: '100px' }}
+                    >
+                      <el-option label="GET" value="GET" />
+                      <el-option label="POST" value="POST" />
+                    </el-select>
+                    <el-input
+                      model-value={targetUrl.value}
+                      onUpdate:model-value={(v: string) => { targetUrl.value = v }}
+                      placeholder="输入目标 URL"
+                      style={{ flex: 1 }}
+                    />
+                  </div>
 
-              {/* Headers 设置区 */}
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                  <span style={{ fontSize: '13px', fontWeight: 600, color: '#606266' }}>📋 Headers</span>
-                  <el-button size="small" icon="Plus" onClick={addHeader} text type="primary">
-                    添加 Header
+                  {/* Headers */}
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                      <span style={{ fontSize: '12px', fontWeight: 600, color: '#606266' }}>📋 Headers</span>
+                      <el-button size="small" icon="Plus" onClick={addHeader} text type="primary">
+                        添加
+                      </el-button>
+                    </div>
+                    {headerPairs.value.map((pair, idx) => (
+                      <div key={idx} style={{ display: 'flex', gap: '6px', marginBottom: '4px' }}>
+                        <el-input
+                          model-value={pair.key}
+                          onUpdate:model-value={(v: string) => { headerPairs.value[idx] = { ...pair, key: v } }}
+                          placeholder="Key"
+                          size="small"
+                          style={{ flex: '1 1 35%' }}
+                        />
+                        <el-input
+                          model-value={pair.value}
+                          onUpdate:model-value={(v: string) => { headerPairs.value[idx] = { ...pair, value: v } }}
+                          placeholder="Value"
+                          size="small"
+                          style={{ flex: '1 1 65%' }}
+                        />
+                        <el-button icon="Delete" circle size="small" onClick={() => removeHeader(idx)} />
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Body (POST only) */}
+                  {method.value === 'POST' && (
+                    <div>
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: '#606266', marginBottom: '4px' }}>
+                        📝 Body (JSON)
+                      </div>
+                      <el-input
+                        model-value={requestBody.value}
+                        onUpdate:model-value={(v: string) => { requestBody.value = v }}
+                        type="textarea"
+                        rows={3}
+                        placeholder='{"key": "value"}'
+                      />
+                    </div>
+                  )}
+
+                  {/* 发送按钮 + 状态 */}
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                    <el-button
+                      type="primary"
+                      icon="Promotion"
+                      onClick={sendRemoteProbe}
+                      loading={remoteLoading.value}
+                      disabled={!targetUrl.value.trim()}
+                    >
+                      {remoteLoading.value ? '请求中...' : '发送探针'}
+                    </el-button>
+                    {remoteResult.value && (
+                      <span style={{ fontSize: '13px', color: '#67c23a', fontWeight: 600 }}>
+                        ✅ 数据获取成功
+                      </span>
+                    )}
+                  </div>
+
+                  {remoteError.value && (
+                    <el-alert title={remoteError.value} type="error" closable={false} show-icon />
+                  )}
+                </div>
+              </el-tab-pane>
+
+              {/* ---- ✍️ 手动添加 ---- */}
+              <el-tab-pane label="✍️ 手动添加" name="manual">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: '#606266' }}>
+                      粘贴 JSON 数据
+                    </span>
+                    <el-button size="small" icon="Operation" onClick={formatManualJson} text type="primary">
+                      {'{} 格式化 JSON'}
+                    </el-button>
+                  </div>
+                  <div class="probe-codemirror-wrapper probe-codemirror-wrapper--manual">
+                    <Codemirror
+                      model-value={manualJson.value}
+                      onUpdate:model-value={(v: string) => { manualJson.value = v }}
+                      extensions={[jsonExtension, themeExtension]}
+                      onReady={onManualReady}
+                      placeholder='粘贴你的 JSON 数据，例如：[{"name": "A", "value": 100}] 或 {"key1": 10, "key2": 20}'
+                    />
+                  </div>
+
+                  {manualError.value && (
+                    <el-alert title={manualError.value} type="error" closable={false} show-icon />
+                  )}
+
+                  <el-button
+                    type="primary"
+                    icon="Right"
+                    onClick={onParseManual}
+                    disabled={!manualJson.value.trim()}
+                    style={{ alignSelf: 'flex-start' }}
+                  >
+                    校验并载入原始数据 →
                   </el-button>
                 </div>
-                {headerPairs.value.map((pair, idx) => (
-                  <div key={idx} style={{ display: 'flex', gap: '8px', marginBottom: '6px' }}>
-                    <el-input
-                      model-value={pair.key}
-                      onUpdate:model-value={(v: string) => { headerPairs.value[idx] = { ...pair, key: v } }}
-                      placeholder="Key"
-                      style={{ flex: '1 1 40%' }}
-                    />
-                    <el-input
-                      model-value={pair.value}
-                      onUpdate:model-value={(v: string) => { headerPairs.value[idx] = { ...pair, value: v } }}
-                      placeholder="Value"
-                      style={{ flex: '1 1 60%' }}
-                    />
-                    <el-button
-                      icon="Delete"
-                      circle
-                      size="small"
-                      onClick={() => removeHeader(idx)}
-                    />
-                  </div>
-                ))}
-                {headerPairs.value.length === 0 && (
-                  <div style={{ fontSize: '12px', color: '#c0c4cc' }}>
-                    未设置自定义 Header（默认会带 Accept: application/json）
-                  </div>
-                )}
-              </div>
-
-              {/* Body 设置区（仅 POST 时显示） */}
-              {method.value === 'POST' && (
-                <div>
-                  <div style={{ fontSize: '13px', fontWeight: 600, color: '#606266', marginBottom: '6px' }}>
-                    📝 Body (JSON)
-                  </div>
-                  <el-input
-                    model-value={requestBody.value}
-                    onUpdate:model-value={(v: string) => { requestBody.value = v }}
-                    type="textarea"
-                    rows={4}
-                    placeholder='{"key": "value"}'
-                  />
-                </div>
-              )}
-
-              {/* 发送按钮 */}
-              <el-button
-                type="primary"
-                icon="Promotion"
-                onClick={sendRemoteProbe}
-                loading={remoteLoading.value}
-                disabled={!targetUrl.value.trim()}
-                style={{ alignSelf: 'flex-start' }}
-              >
-                {remoteLoading.value ? '请求中...' : '发送探针'}
-              </el-button>
-
-              {/* 错误提示 */}
-              {remoteError.value && (
-                <el-alert title={remoteError.value} type="error" closable={false} show-icon />
-              )}
-
-              {/* 探针结果预览 */}
-              {remoteResult.value && (
-                <div>
-                  <div style={{ fontSize: '13px', fontWeight: 600, color: '#67c23a', marginBottom: '6px' }}>
-                    ✅ 数据获取成功
-                  </div>
-                  <pre style={{
-                    background: '#f4f4f4',
-                    padding: '12px',
-                    borderRadius: '6px',
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-all',
-                    maxHeight: '220px',
-                    overflowY: 'auto',
-                    fontSize: '11px',
-                    margin: 0,
-                    border: '1px solid #e1f3d8',
-                  }}>
-                    {JSON.stringify(remoteResult.value, null, 2)}
-                  </pre>
-                </div>
-              )}
-            </div>
-          </el-tab-pane>
-
-          {/* ==================== 页签 2：✍️ 手动添加 ==================== */}
-          <el-tab-pane label="✍️ 手动添加" name="manual">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <div>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: '#606266', marginBottom: '6px' }}>
-                  粘贴 JSON 数据
-                </div>
-                <el-input
-                  model-value={manualJson.value}
-                  onUpdate:model-value={(v: string) => { manualJson.value = v }}
-                  type="textarea"
-                  rows={8}
-                  placeholder='粘贴你的 JSON 数据，例如：[{"name": "A", "value": 100}] 或 {"key1": 10, "key2": 20}'
-                />
-              </div>
-
-              {manualError.value && (
-                <el-alert title={manualError.value} type="error" closable={false} show-icon />
-              )}
-            </div>
-          </el-tab-pane>
-        </el-tabs>
-
-        {/* ==================== 底部：资产名称 + 保存按钮 ==================== */}
-        <div style={{
-          marginTop: '20px',
-          paddingTop: '16px',
-          borderTop: '1px solid #ebeef5',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '12px',
-        }}>
-          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-            <span style={{ fontSize: '13px', fontWeight: 600, color: '#303133', whiteSpace: 'nowrap' }}>
-              🏷️ 资产名称
-            </span>
-            <el-input
-              model-value={assetName.value}
-              onUpdate:model-value={(v: string) => { assetName.value = v }}
-              placeholder={`数据资产_${store.assets.length + 1}`}
-              style={{ flex: 1 }}
-              clearable
-            />
+              </el-tab-pane>
+            </el-tabs>
           </div>
 
-          <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-            <el-button onClick={props.onClose}>取消</el-button>
-            {activeTab.value === 'manual' ? (
-              <el-button
-                type="primary"
-                icon="FolderAdd"
-                onClick={onSaveManual}
-                disabled={!manualJson.value.trim()}
-              >
-                保存为数据资产
-              </el-button>
-            ) : (
-              <el-button
-                type="primary"
-                icon="FolderAdd"
-                onClick={onSaveRemote}
-                disabled={!remoteResult.value}
-              >
-                保存为数据资产
-              </el-button>
+          {/* ==================== 下半区：数据预览与过滤 ==================== */}
+          <div class="probe-section probe-section--output">
+            <div class="probe-section__title">📊 数据预览与过滤</div>
+            <div class="probe-output-grid">
+              {/* 原始数据 (只读) */}
+              <div class="probe-output-pane">
+                <div class="probe-output-pane__header">📦 原始数据 (只读)</div>
+                <div class="probe-codemirror-wrapper probe-codemirror-wrapper--readonly">
+                  <Codemirror
+                    model-value={rawDataJson.value}
+                    extensions={[jsonExtension, themeExtension]}
+                    disabled={true}
+                  />
+                </div>
+              </div>
+
+              {/* JS 过滤器 */}
+              <div class="probe-output-pane">
+                <div class="probe-output-pane__header">🧹 JS 过滤器</div>
+                <div class="probe-codemirror-wrapper">
+                  <Codemirror
+                    model-value={filterCode.value}
+                    onUpdate:model-value={(v: string) => { filterCode.value = v }}
+                    extensions={[jsExtension, themeExtension]}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* 过滤器错误反馈 */}
+            {filterError.value && (
+              <div class="probe-filter-error">
+                <strong>❌ {filterError.value}</strong>
+              </div>
             )}
           </div>
         </div>
+
+        {/* ==================== 底部操作栏 ==================== */}
+        <div class="probe-footer">
+          <el-button onClick={props.onClose}>取消</el-button>
+          <el-button
+            type="primary"
+            icon="Upload"
+            onClick={executeAndMerge}
+            loading={executing.value}
+            disabled={rawData.value === null}
+          >
+            执行并合并至全局数据
+          </el-button>
+        </div>
+
+        {/* ==================== 嵌入式样式（scoped via class） ==================== */}
+        <style>{`
+          .probe-layout {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            height: 72vh;
+            min-height: 520px;
+            overflow: hidden;
+          }
+
+          .probe-section {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+          }
+
+          .probe-section--input {
+            flex: 0 0 auto;
+            max-height: 40%;
+          }
+          .probe-section--input .el-tabs__content {
+            overflow-y: auto;
+            max-height: 200px;
+          }
+
+          .probe-section--output {
+            flex: 1 1 auto;
+            min-height: 0;
+          }
+
+          .probe-section__title {
+            font-size: 14px;
+            font-weight: 700;
+            color: #303133;
+            margin-bottom: 8px;
+            padding-bottom: 6px;
+            border-bottom: 2px solid #409eff;
+          }
+
+          .probe-output-grid {
+            display: flex;
+            gap: 12px;
+            flex: 1;
+            min-height: 0;
+          }
+
+          .probe-output-pane {
+            flex: 1 1 50%;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            overflow: hidden;
+          }
+
+          .probe-output-pane__header {
+            font-size: 12px;
+            font-weight: 600;
+            color: #606266;
+            margin-bottom: 4px;
+          }
+
+          .probe-codemirror-wrapper {
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+            border: 1px solid #dcdfe6;
+            border-radius: 6px;
+          }
+          .probe-codemirror-wrapper .cm-editor {
+            height: 100%;
+          }
+          .probe-codemirror-wrapper .cm-scroller {
+            overflow: auto !important;
+          }
+
+          .probe-codemirror-wrapper--manual {
+            min-height: 160px;
+            max-height: 200px;
+          }
+
+          .probe-codemirror-wrapper--readonly .cm-editor {
+            opacity: 0.85;
+          }
+
+          .probe-filter-error {
+            margin-top: 8px;
+            padding: 10px 14px;
+            background: #fef0f0;
+            border-radius: 4px;
+            border: 1px solid #fde2e2;
+            font-size: 12px;
+            color: #f56c6c;
+            line-height: 1.6;
+            word-break: break-all;
+            flex-shrink: 0;
+          }
+
+          .probe-footer {
+            margin-top: 16px;
+            padding-top: 14px;
+            border-top: 1px solid #ebeef5;
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+          }
+        `}</style>
       </el-dialog>
     )
   },

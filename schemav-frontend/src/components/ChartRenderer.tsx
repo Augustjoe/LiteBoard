@@ -45,10 +45,10 @@ export default defineComponent({
           >
             <div style={{ fontSize: '48px', opacity: 0.3 }}>📐</div>
             <div style={{ fontSize: '16px', color: '#909399' }}>
-              画布为空 — 请在左侧资产超市添加数据资产并创建图表组件
+              画布为空 — 请先在左侧初始化全局数据并创建图表组件
             </div>
             <div style={{ fontSize: '12px', color: '#c0c4cc' }}>
-              提示：添加数据资产 → 创建图表组件 → 绑定资产 → 配置映射
+              提示：初始化全局数据 → 创建图表组件 → 绑定 X/Y 轴字段
             </div>
           </div>
         )}
