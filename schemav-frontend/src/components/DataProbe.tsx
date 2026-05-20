@@ -62,6 +62,8 @@ export default defineComponent({
     const filterCode = ref(DEFAULT_FILTER_CODE)
     const filterError = ref<string | null>(null)
     const executing = ref(false)
+    const showPreviewDialog = ref(false)
+    const previewResultJson = ref('')
 
     // ==================== CodeMirror 视图引用（用于格式化） ====================
     let manualEditorView: CMEditorView | null = null
@@ -140,8 +142,8 @@ export default defineComponent({
       }
     }
 
-    // ==================== 手动模式：校验 JSON 并设置原始数据 ====================
-    const onParseManual = () => {
+    // ==================== 手动模式：校验 JSON 并直接合并至全局数据 ====================
+    const onParseAndMergeManual = () => {
       manualError.value = null
 
       if (!manualJson.value.trim()) {
@@ -157,13 +159,16 @@ export default defineComponent({
         return
       }
 
-      if (parsed === null || parsed === undefined) {
-        manualError.value = '数据为空 (null/undefined)'
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        const typeLabel = Array.isArray(parsed) ? 'Array' : (parsed === null ? 'null' : typeof parsed)
+        manualError.value = `数据必须是纯对象格式 (Plain Object)，不能是 ${typeLabel}`
         return
       }
 
-      rawData.value = parsed
-      manualError.value = null
+      // 校验通过，直接增量合并
+      store.mergeGlobalData(parsed as Record<string, any>)
+      ElMessage.success('数据已成功合并至全局数据')
+      props.onClose()
     }
 
     // ==================== 执行 JS 过滤器并合并到全局数据 ====================
@@ -211,6 +216,31 @@ export default defineComponent({
       }
     }
 
+    // ==================== 预览 JS 过滤器执行结果 ====================
+    const onPreviewFilter = async () => {
+      filterError.value = null
+      if (rawData.value === null) {
+        filterError.value = '无可用的原始数据，请先在【远程获取】或【手动添加】中获取数据'
+        return
+      }
+
+      try {
+        const fn = new Function('res', filterCode.value)
+        const result = fn(rawData.value)
+        
+        if (typeof result !== 'object' || result === null) {
+          const typeLabel = result === null ? 'null' : typeof result
+          filterError.value = `返回值必须是对象格式 (Object/Array)，不能是 ${typeLabel}！`
+          return
+        }
+
+        previewResultJson.value = JSON.stringify(result, null, 2)
+        showPreviewDialog.value = true
+      } catch (err) {
+        filterError.value = '代码执行异常: ' + (err instanceof Error ? err.message : String(err))
+      }
+    }
+
     // ==================== 弹窗打开时重置状态 ====================
     watch(
       () => props.visible,
@@ -230,6 +260,8 @@ export default defineComponent({
           filterCode.value = DEFAULT_FILTER_CODE
           filterError.value = null
           executing.value = false
+          showPreviewDialog.value = false
+          previewResultJson.value = ''
         }
       },
     )
@@ -245,7 +277,7 @@ export default defineComponent({
         close-on-click-modal={false}
         class="data-probe-dialog data-probe-dialog--v2"
       >
-        <div class="probe-layout">
+        <div class={['probe-layout', activeTab.value === 'manual' && 'probe-layout--manual']}>
           {/* ==================== 上半区：输入源 ==================== */}
           <div class="probe-section probe-section--input">
             <div class="probe-section__title">📥 输入源</div>
@@ -345,8 +377,8 @@ export default defineComponent({
               </el-tab-pane>
 
               {/* ---- ✍️ 手动添加 ---- */}
-              <el-tab-pane label="✍️ 手动添加" name="manual">
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <el-tab-pane label="✍️ 手动添加" name="manual" class="manual-tab-pane">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', height: '100%' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <span style={{ fontSize: '12px', fontWeight: 600, color: '#606266' }}>
                       粘贴 JSON 数据
@@ -369,23 +401,16 @@ export default defineComponent({
                     <el-alert title={manualError.value} type="error" closable={false} show-icon />
                   )}
 
-                  <el-button
-                    type="primary"
-                    icon="Right"
-                    onClick={onParseManual}
-                    disabled={!manualJson.value.trim()}
-                    style={{ alignSelf: 'flex-start' }}
-                  >
-                    校验并载入原始数据 →
-                  </el-button>
+                  {/* 按钮已统一移至底部操作栏 */}
                 </div>
               </el-tab-pane>
             </el-tabs>
           </div>
 
           {/* ==================== 下半区：数据预览与过滤 ==================== */}
-          <div class="probe-section probe-section--output">
-            <div class="probe-section__title">📊 数据预览与过滤</div>
+          {activeTab.value !== 'manual' && (
+            <div class="probe-section probe-section--output">
+              <div class="probe-section__title">📊 数据预览与过滤</div>
             <div class="probe-output-grid">
               {/* 原始数据 (只读) */}
               <div class="probe-output-pane">
@@ -418,22 +443,67 @@ export default defineComponent({
                 <strong>❌ {filterError.value}</strong>
               </div>
             )}
-          </div>
+            </div>
+          )}
         </div>
 
         {/* ==================== 底部操作栏 ==================== */}
         <div class="probe-footer">
           <el-button onClick={props.onClose}>取消</el-button>
-          <el-button
-            type="primary"
-            icon="Upload"
-            onClick={executeAndMerge}
-            loading={executing.value}
-            disabled={rawData.value === null}
-          >
-            执行并合并至全局数据
-          </el-button>
+          {activeTab.value === 'manual' ? (
+            <el-button
+              type="primary"
+              icon="Upload"
+              onClick={onParseAndMergeManual}
+              disabled={!manualJson.value.trim()}
+            >
+              校验并直接合并至全局数据
+            </el-button>
+          ) : (
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <el-button
+                type="warning"
+                icon="View"
+                onClick={onPreviewFilter}
+                disabled={rawData.value === null}
+              >
+                预览过滤器结果
+              </el-button>
+              <el-button
+                type="primary"
+                icon="Upload"
+                onClick={executeAndMerge}
+                loading={executing.value}
+                disabled={rawData.value === null}
+              >
+                执行并合并至全局数据
+              </el-button>
+            </div>
+          )}
         </div>
+
+        {/* 过滤器效果预览弹窗 */}
+        <el-dialog
+          model-value={showPreviewDialog.value}
+          onUpdate:model-value={(val: boolean) => { if (!val) showPreviewDialog.value = false }}
+          title="🧹 过滤器执行结果预览"
+          width="600px"
+          top="10vh"
+          append-to-body
+          destroy-on-close
+        >
+          <div style={{ height: '40vh', border: '1px solid #dcdfe6', borderRadius: '6px', overflow: 'hidden' }}>
+            <Codemirror
+              model-value={previewResultJson.value}
+              extensions={[jsonExtension, themeExtension]}
+              disabled={true}
+              style={{ height: '100%' }}
+            />
+          </div>
+          <div style={{ marginTop: '14px', textAlign: 'right' }}>
+            <el-button type="primary" onClick={() => { showPreviewDialog.value = false }}>确定</el-button>
+          </div>
+        </el-dialog>
 
         {/* ==================== 嵌入式样式（scoped via class） ==================== */}
         <style>{`
@@ -477,6 +547,7 @@ export default defineComponent({
 
           .probe-output-grid {
             display: flex;
+            flex-direction: column;
             gap: 12px;
             flex: 1;
             min-height: 0;
@@ -540,6 +611,38 @@ export default defineComponent({
             display: flex;
             justify-content: flex-end;
             gap: 10px;
+          }
+
+          /* === 手动模式覆盖样式 === */
+          .probe-layout--manual .probe-section--input {
+            flex: 1;
+            max-height: 100%;
+            display: flex;
+            flex-direction: column;
+          }
+          .probe-layout--manual .probe-tabs {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+          }
+          .probe-layout--manual .el-tabs__content {
+            flex: 1;
+            max-height: none;
+            display: flex;
+            flex-direction: column;
+          }
+          .probe-layout--manual .manual-tab-pane {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+          }
+          .probe-layout--manual .probe-codemirror-wrapper--manual {
+            flex: 1;
+            max-height: none;
+            box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.04);
+            border: 1px solid #c0c4cc;
+            border-radius: 8px;
           }
         `}</style>
       </el-dialog>

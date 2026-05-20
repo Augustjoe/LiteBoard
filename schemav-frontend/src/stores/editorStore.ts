@@ -13,6 +13,14 @@ export interface ChartSchema {
   yAxisField: string
   /** ECharts 深度自定义 JSON 配置 */
   customOption?: string
+  /** 新增：图表标题 */
+  title?: string
+  /** 新增：主题色 */
+  color?: string
+  /** 新增：是否使用手写 JS 转换数据 */
+  useCustomDataCode?: boolean
+  /** 新增：手写 JS 过滤数据代码 */
+  customDataCode?: string
 }
 
 /** 组件位置与尺寸 */
@@ -104,6 +112,14 @@ export const useEditorStore = defineStore('editor', () => {
   /** 全屏预览模式 */
   const isFullscreenPreview = ref(false)
 
+  /** 画布配置 */
+  const canvasConfig = ref({
+    width: 1920,
+    height: 1080,
+    scale: 1, // 当前缩放比例，默认 1
+    background: '#f8f9fb'
+  })
+
   // ===================== Getters =====================
 
   /** 全局数据是否已挂载 */
@@ -144,9 +160,9 @@ export const useEditorStore = defineStore('editor', () => {
       version: '1.0.0',
       title: title.value,
       canvas: {
-        width: 1920,
-        height: 1080,
-        background: '#f0f2f5',
+        width: canvasConfig.value.width,
+        height: canvasConfig.value.height,
+        background: canvasConfig.value.background,
       },
       components: components.value,
       globalData: globalData.value,
@@ -277,6 +293,13 @@ export const useEditorStore = defineStore('editor', () => {
     components.value = schema.components ?? []
     globalData.value = schema.globalData ?? null
     selectedComponentId.value = null
+    
+    if (schema.canvas) {
+      canvasConfig.value.width = schema.canvas.width || 1920
+      canvasConfig.value.height = schema.canvas.height || 1080
+      canvasConfig.value.background = schema.canvas.background || '#f8f9fb'
+      canvasConfig.value.scale = 1 // 默认加载时缩放比例为 1
+    }
 
     restoreNextId(schema.components ?? [])
 
@@ -393,6 +416,10 @@ export const useEditorStore = defineStore('editor', () => {
     isFullscreenPreview.value = !isFullscreenPreview.value
   }
 
+  function updateCanvasConfig(partial: Partial<typeof canvasConfig.value>): void {
+    canvasConfig.value = { ...canvasConfig.value, ...partial }
+  }
+
   function setTitle(newTitle: string): void {
     title.value = newTitle
   }
@@ -407,6 +434,7 @@ export const useEditorStore = defineStore('editor', () => {
     components,
     selectedComponentId,
     isFullscreenPreview,
+    canvasConfig,
     // getters
     availableFields,
     hasData,
@@ -435,5 +463,6 @@ export const useEditorStore = defineStore('editor', () => {
     resetAll,
     toggleFullscreenPreview,
     setTitle,
+    updateCanvasConfig,
   }
 })

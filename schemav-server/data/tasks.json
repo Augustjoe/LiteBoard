@@ -5,7 +5,7 @@
     "description": "新建大屏任务",
     "cover": "linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)",
     "createdAt": "2026-05-18T06:41:04.840Z",
-    "updatedAt": "2026-05-18T06:41:04.840Z",
+    "updatedAt": "2026-05-20T07:50:24.364Z",
     "schema": {
       "version": "1.0.0",
       "title": "新建大屏任务",
@@ -15,9 +15,48 @@
         "background": "#f0f2f5"
       },
       "components": [],
-      "assets": [],
-      "createdAt": "2026-05-18T06:41:04.840Z",
-      "updatedAt": "2026-05-18T06:41:04.840Z"
+      "globalData": {
+        "data": [
+          {
+            "month": "1月",
+            "sales": 150,
+            "profit": 80,
+            "target": 200
+          },
+          {
+            "month": "2月",
+            "sales": 230,
+            "profit": 120,
+            "target": 200
+          },
+          {
+            "month": "3月",
+            "sales": 180,
+            "profit": 90,
+            "target": 200
+          },
+          {
+            "month": "4月",
+            "sales": 299,
+            "profit": 150,
+            "target": 250
+          },
+          {
+            "month": "5月",
+            "sales": 320,
+            "profit": 180,
+            "target": 250
+          },
+          {
+            "month": "6月",
+            "sales": 280,
+            "profit": 140,
+            "target": 250
+          }
+        ]
+      },
+      "createdAt": "2026-05-20T07:50:24.356Z",
+      "updatedAt": "2026-05-20T07:50:24.364Z"
     }
   }
 ]

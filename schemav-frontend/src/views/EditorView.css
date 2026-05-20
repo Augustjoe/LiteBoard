@@ -53,17 +53,92 @@
   min-width: 0;
 }
 
-/* Node 4 升级：画布改为 position:relative 容器 + 点阵网格背景 */
+/* Node 4 升级：画布改为 position:relative 容器 */
 .editor-canvas {
   width: 100%;
   height: 100%;
   position: relative;
   overflow: auto;
+  background-color: #e4e7ed; /* Outer background when scaled smaller */
+}
 
+/* 实际缩放内容的容器 */
+.canvas-content {
+  position: absolute;
+  top: 50px;
+  left: 50px;
+  transform-origin: top left;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  transition: transform 0.2s;
+  
   /* 20px 间距的点阵网格（Figma 风格） */
   background-color: #f8f9fb;
   background-image: radial-gradient(circle, #c0c4cc 1px, transparent 1px);
   background-size: 20px 20px;
+}
+
+/* ============================================
+   拖拽与折叠面板样式
+   ============================================ */
+.resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  background: transparent;
+  cursor: ew-resize;
+  z-index: 20;
+}
+
+.resize-handle:hover {
+  background: rgba(64, 158, 255, 0.2);
+}
+
+.resize-handle-left {
+  right: -3px;
+}
+
+.resize-handle-right {
+  left: -3px;
+}
+
+.panel-toggle-btn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 48px;
+  background: #fff;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 30;
+  color: #909399;
+  font-size: 12px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  transition: all 0.2s;
+}
+
+.panel-toggle-btn:hover {
+  background: #f5f7fa;
+  color: #409eff;
+}
+
+.toggle-left {
+  left: 0;
+  border-left: none;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.toggle-right {
+  right: 0;
+  border-right: none;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
 /* ============================================

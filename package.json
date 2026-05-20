@@ -1,0 +1,13 @@
+{
+  "name": "liteboard-root",
+  "version": "1.0.0",
+  "private": true,
+  "description": "LiteBoard root project to manage frontend and server concurrently",
+  "scripts": {
+    "install:all": "npm install && npm install --prefix schemav-frontend && npm install --prefix schemav-server",
+    "dev": "concurrently --kill-others -n \"server,frontend\" -c \"bgBlue.bold,bgGreen.bold\" \"npm run dev --prefix schemav-server\" \"npm run dev --prefix schemav-frontend\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

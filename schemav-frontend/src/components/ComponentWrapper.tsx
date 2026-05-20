@@ -80,12 +80,23 @@ export default defineComponent({
     const chartBlockReason = computed<string | null>(() => {
       const schema = props.component.props.chartSchema as ChartSchema | undefined
 
-      if (!schema || !schema.xAxisField || !schema.yAxisField) {
+      if (!schema) {
         return 'no_binding'
       }
 
       if (!store.globalData) {
         return 'no_global_data'
+      }
+
+      if (schema.useCustomDataCode) {
+        if (!schema.customDataCode) {
+          return 'no_custom_code'
+        }
+        return null
+      }
+
+      if (!schema.xAxisField || !schema.yAxisField) {
+        return 'no_binding'
       }
 
       const xVal = store.globalData[schema.xAxisField]
@@ -115,19 +126,37 @@ export default defineComponent({
       if (!schema) return null
 
       const gd = store.globalData!
-      const { xAxisField, yAxisField, chartType } = schema
+      const { xAxisField, yAxisField, chartType, useCustomDataCode, customDataCode, color, title } = schema
 
-      const xRaw = gd[xAxisField]
-      const yRaw = gd[yAxisField]
+      let xRaw: any = []
+      let yRaw: any = []
+
+      if (useCustomDataCode && customDataCode) {
+        try {
+          const fn = new Function('res', customDataCode)
+          const customResult = fn(gd)
+          if (customResult && typeof customResult === 'object') {
+            xRaw = customResult.xAxis || customResult.xData || []
+            yRaw = customResult.yAxis || customResult.yData || []
+          }
+        } catch (err) {
+          console.error('[ComponentWrapper] Execute customDataCode failed:', err)
+        }
+      } else {
+        xRaw = gd[xAxisField]
+        yRaw = gd[yAxisField]
+      }
 
       // 标准化为数组
       const xData: any[] = Array.isArray(xRaw) ? xRaw : [xRaw]
       const yData: any[] = Array.isArray(yRaw) ? yRaw : [yRaw]
 
+      const seriesName = yAxisField || title || '数据'
+
       // 基础图表配置
       const baseOption = {
         title: {
-          text: `${chartType === 'bar' ? '柱状图' : '折线图'} — ${yAxisField}`,
+          text: title || `${chartType === 'bar' ? '柱状图' : '折线图'} — ${seriesName}`,
           left: 'center',
           top: 8,
           textStyle: {
@@ -136,11 +165,12 @@ export default defineComponent({
             color: '#303133',
           },
         },
+        color: color ? [color] : undefined,
         tooltip: {
           trigger: 'axis' as const,
         },
         legend: {
-          data: [yAxisField],
+          data: [seriesName],
           bottom: 8,
         },
         grid: {
@@ -160,11 +190,11 @@ export default defineComponent({
         },
         yAxis: {
           type: 'value' as const,
-          name: yAxisField,
+          name: seriesName,
         },
         series: [
           {
-            name: yAxisField,
+            name: seriesName,
             type: chartType,
             data: yData.map((item) => {
               const val = Number(item)
@@ -246,8 +276,9 @@ export default defineComponent({
     const onMouseMove = (e: MouseEvent) => {
       // ---- 拖拽 ----
       if (isDragging.value) {
-        const dx = e.clientX - dragStartMouse.value.x
-        const dy = e.clientY - dragStartMouse.value.y
+        const scale = store.canvasConfig.scale || 1
+        const dx = (e.clientX - dragStartMouse.value.x) / scale
+        const dy = (e.clientY - dragStartMouse.value.y) / scale
 
         store.updateComponentPosition(props.component.id, {
           x: snapToGrid(Math.max(0, dragStartPos.value.x + dx)),
@@ -258,8 +289,9 @@ export default defineComponent({
 
       // ---- 缩放 ----
       if (isResizing.value && resizeDir.value) {
-        const dx = e.clientX - resizeStartMouse.value.x
-        const dy = e.clientY - resizeStartMouse.value.y
+        const scale = store.canvasConfig.scale || 1
+        const dx = (e.clientX - resizeStartMouse.value.x) / scale
+        const dy = (e.clientY - resizeStartMouse.value.y) / scale
         const dir = resizeDir.value
         const sp = resizeStartPos.value
 
@@ -450,7 +482,9 @@ export default defineComponent({
                         ? '全局数据中未找到对应字段'
                         : chartBlockReason.value === 'no_binding'
                           ? '请在右侧配置面板绑定 X/Y 轴字段'
-                          : '请检查数据绑定配置'}
+                          : chartBlockReason.value === 'no_custom_code'
+                            ? '请输入手写 JS 转换代码'
+                            : '请检查数据绑定配置'}
                   </span>
                 </div>
               )

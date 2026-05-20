@@ -1,6 +1,9 @@
 import { defineComponent, ref, computed, watch } from 'vue'
 import { useEditorStore, type ChartSchema } from '../stores/editorStore'
 import { debounce } from 'lodash-es'
+import { Codemirror } from 'vue-codemirror'
+import { javascript } from '@codemirror/lang-javascript'
+import { oneDark } from '@codemirror/theme-one-dark'
 
 /**
  * ChartConfigPanel — 图表配置面板（全局数据湖升级）
@@ -123,8 +126,27 @@ export default defineComponent({
       store.updateChartSchema({ xAxisField: String(val) })
     }
 
+    const jsExtension = javascript()
+    const themeExtension = oneDark
+
     const onYFieldChange = (val: string | number | boolean) => {
       store.updateChartSchema({ yAxisField: String(val) })
+    }
+
+    const onTitleChange = (val: string) => {
+      store.updateChartSchema({ title: val })
+    }
+
+    const onColorChange = (val: string) => {
+      store.updateChartSchema({ color: val || '#409eff' })
+    }
+
+    const onUseCustomDataCodeChange = (val: string | number | boolean) => {
+      store.updateChartSchema({ useCustomDataCode: Boolean(val) })
+    }
+
+    const onCustomDataCodeChange = (val: string) => {
+      store.updateChartSchema({ customDataCode: val })
     }
 
     /** 删除当前选中组件 */
@@ -234,6 +256,15 @@ export default defineComponent({
                 ⚙️ 基础配置
               </div>
               <el-form label-position="top" size="default">
+                {/* 图表标题 */}
+                <el-form-item label="图表标题">
+                  <el-input
+                    model-value={schema.value.title || ''}
+                    onUpdate:model-value={onTitleChange}
+                    placeholder="图表标题"
+                  />
+                </el-form-item>
+
                 {/* 图表类型 */}
                 <el-form-item label="图表类型">
                   <el-radio-group
@@ -245,37 +276,73 @@ export default defineComponent({
                   </el-radio-group>
                 </el-form-item>
 
-                {/* X 轴字段 — 从 globalData 顶层 keys 中选取 */}
-                <el-form-item label="X 轴 (维度)">
-                  <el-select
-                    model-value={schema.value.xAxisField}
-                    onUpdate:model-value={onXFieldChange}
-                    placeholder={store.globalData ? '选择分类 / 维度字段' : '请先初始化全局数据'}
-                    style={{ width: '100%' }}
-                    clearable
-                    disabled={!store.globalData}
-                  >
-                    {store.availableFields.map((field) => (
-                      <el-option key={field} label={field} value={field} />
-                    ))}
-                  </el-select>
+                {/* 主题颜色 */}
+                <el-form-item label="主题颜色">
+                  <el-color-picker
+                    model-value={schema.value.color || '#409eff'}
+                    onUpdate:model-value={onColorChange}
+                  />
                 </el-form-item>
 
-                {/* Y 轴字段 — 从 globalData 顶层 keys 中选取 */}
-                <el-form-item label="Y 轴 (指标)">
-                  <el-select
-                    model-value={schema.value.yAxisField}
-                    onUpdate:model-value={onYFieldChange}
-                    placeholder={store.globalData ? '选择数据 / 指标字段' : '请先初始化全局数据'}
-                    style={{ width: '100%' }}
-                    clearable
-                    disabled={!store.globalData}
+                {/* 配置模式 */}
+                <el-form-item label="数据来源模式">
+                  <el-radio-group
+                    model-value={schema.value.useCustomDataCode || false}
+                    onUpdate:model-value={onUseCustomDataCodeChange}
                   >
-                    {store.availableFields.map((field) => (
-                      <el-option key={field} label={field} value={field} />
-                    ))}
-                  </el-select>
+                    <el-radio value={false}>公共数据池</el-radio>
+                    <el-radio value={true}>手写 JS 代码</el-radio>
+                  </el-radio-group>
                 </el-form-item>
+
+                {!schema.value.useCustomDataCode ? (
+                  <>
+                    {/* X 轴字段 — 从 globalData 顶层 keys 中选取 */}
+                    <el-form-item label="X 轴 (维度)">
+                      <el-select
+                        model-value={schema.value.xAxisField}
+                        onUpdate:model-value={onXFieldChange}
+                        placeholder={store.globalData ? '选择分类 / 维度字段' : '请先初始化全局数据'}
+                        style={{ width: '100%' }}
+                        clearable
+                        disabled={!store.globalData}
+                      >
+                        {store.availableFields.map((field) => (
+                          <el-option key={field} label={field} value={field} />
+                        ))}
+                      </el-select>
+                    </el-form-item>
+
+                    {/* Y 轴字段 — 从 globalData 顶层 keys 中选取 */}
+                    <el-form-item label="Y 轴 (指标)">
+                      <el-select
+                        model-value={schema.value.yAxisField}
+                        onUpdate:model-value={onYFieldChange}
+                        placeholder={store.globalData ? '选择数据 / 指标字段' : '请先初始化全局数据'}
+                        style={{ width: '100%' }}
+                        clearable
+                        disabled={!store.globalData}
+                      >
+                        {store.availableFields.map((field) => (
+                          <el-option key={field} label={field} value={field} />
+                        ))}
+                      </el-select>
+                    </el-form-item>
+                  </>
+                ) : (
+                  <el-form-item label="JS 数据转换代码">
+                    <div style={{ fontSize: '11px', color: '#909399', marginBottom: '4px' }}>
+                      变量 <strong>res</strong> 代表公共数据。请返回 <code>{`{ xAxis: [...], yAxis: [...] }`}</code> 对象。
+                    </div>
+                    <div style={{ border: '1px solid #dcdfe6', borderRadius: '4px', overflow: 'hidden', height: '180px', width: '100%' }}>
+                      <Codemirror
+                        model-value={schema.value.customDataCode || ''}
+                        onUpdate:model-value={onCustomDataCodeChange}
+                        extensions={[jsExtension, themeExtension]}
+                      />
+                    </div>
+                  </el-form-item>
+                )}
               </el-form>
             </div>
 
