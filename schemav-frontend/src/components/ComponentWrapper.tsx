@@ -29,6 +29,19 @@ const GRID_SIZE = 20
 const snapToGrid = (value: number): number =>
   Math.round(value / GRID_SIZE) * GRID_SIZE
 
+function hasComplexItems(values: any[]): boolean {
+  return values.some((value) =>
+    value !== null &&
+    value !== undefined &&
+    (typeof value === 'object' || typeof value === 'function')
+  )
+}
+
+function isNumericArray(values: any[]): boolean {
+  const present = values.filter((value) => value !== null && value !== undefined && value !== '')
+  return present.length > 0 && present.every((value) => Number.isFinite(Number(value)))
+}
+
 export default defineComponent({
   name: 'ComponentWrapper',
   props: {
@@ -106,12 +119,24 @@ export default defineComponent({
         return 'field_not_found'
       }
 
-      // 检查是否至少有一个是数组
-      const xArr = Array.isArray(xVal) ? xVal : [xVal]
-      const yArr = Array.isArray(yVal) ? yVal : [yVal]
+      if (!Array.isArray(xVal) || !Array.isArray(yVal)) {
+        return 'invalid_field_shape'
+      }
 
-      if (xArr.length === 0 && yArr.length === 0) {
+      if (xVal.length === 0 || yVal.length === 0) {
         return 'empty'
+      }
+
+      if (xVal.length !== yVal.length) {
+        return 'length_mismatch'
+      }
+
+      if (hasComplexItems(xVal)) {
+        return 'complex_x'
+      }
+
+      if (!isNumericArray(yVal)) {
+        return 'non_numeric_y'
       }
 
       return null
@@ -147,9 +172,8 @@ export default defineComponent({
         yRaw = gd[yAxisField]
       }
 
-      // 标准化为数组
-      const xData: any[] = Array.isArray(xRaw) ? xRaw : [xRaw]
-      const yData: any[] = Array.isArray(yRaw) ? yRaw : [yRaw]
+      const xData: any[] = Array.isArray(xRaw) ? xRaw : []
+      const yData: any[] = Array.isArray(yRaw) ? yRaw : []
 
       const seriesName = yAxisField || title || '数据'
 
@@ -480,6 +504,14 @@ export default defineComponent({
                       ? '请先在左侧初始化全局数据'
                       : chartBlockReason.value === 'field_not_found'
                         ? '全局数据中未找到对应字段'
+                        : chartBlockReason.value === 'invalid_field_shape'
+                          ? '字段值必须是数组，请检查公共数据池'
+                          : chartBlockReason.value === 'length_mismatch'
+                            ? 'X/Y 字段数组长度不一致'
+                            : chartBlockReason.value === 'complex_x'
+                              ? 'X 轴字段不能包含对象值'
+                              : chartBlockReason.value === 'non_numeric_y'
+                                ? 'Y 轴字段必须是数值数组'
                         : chartBlockReason.value === 'no_binding'
                           ? '请在右侧配置面板绑定 X/Y 轴字段'
                           : chartBlockReason.value === 'no_custom_code'

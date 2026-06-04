@@ -1,6 +1,5 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { merge } from 'lodash-es'
 
 // ============================================================
 // 接口定义
@@ -50,10 +49,13 @@ export interface DashboardSchema {
     background: string
   }
   components: ComponentInstance[]
-  globalData: Record<string, any> | null
+  globalData: DataPool | null
   createdAt: string
   updatedAt: string
 }
+
+/** 当前大屏的公共数据池：字段名 -> 字段值数组 */
+export type DataPool = Record<string, any[]>
 
 /** 后端返回的 Task 完整结构 */
 export interface Task {
@@ -87,6 +89,21 @@ function restoreNextId(components: ComponentInstance[]): void {
 
 const API_BASE = '/api/tasks'
 
+function normalizeDataPool(data: unknown): DataPool | null {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null
+
+  const entries = Object.entries(data as Record<string, unknown>)
+    .filter(([, value]) => Array.isArray(value))
+
+  if (entries.length === 0) return null
+  return Object.fromEntries(entries) as DataPool
+}
+
+function isNumericArray(values: any[]): boolean {
+  const present = values.filter((value) => value !== null && value !== undefined && value !== '')
+  return present.length > 0 && present.every((value) => Number.isFinite(Number(value)))
+}
+
 // ============================================================
 // Store 定义
 // ============================================================
@@ -101,7 +118,7 @@ export const useEditorStore = defineStore('editor', () => {
   const title = ref('未命名大屏')
 
   /** 🔥 全局单一数据湖 — 当前大屏的唯一数据基座 */
-  const globalData = ref<Record<string, any> | null>(null)
+  const globalData = ref<DataPool | null>(null)
 
   /** 画布上的所有组件实例 */
   const components = ref<ComponentInstance[]>([])
@@ -128,7 +145,17 @@ export const useEditorStore = defineStore('editor', () => {
   /** 从 globalData 顶层 keys 推导可用字段 */
   const availableFields = computed<string[]>(() => {
     if (!globalData.value) return []
-    return Object.keys(globalData.value)
+    return Object.keys(globalData.value).filter((field) => Array.isArray(globalData.value?.[field]))
+  })
+
+  const numericFields = computed<string[]>(() => {
+    if (!globalData.value) return []
+    return availableFields.value.filter((field) => isNumericArray(globalData.value![field]))
+  })
+
+  const dimensionFields = computed<string[]>(() => {
+    const numeric = new Set(numericFields.value)
+    return availableFields.value.filter((field) => !numeric.has(field))
   })
 
   const selectedComponent = computed<ComponentInstance | null>(() => {
@@ -174,19 +201,39 @@ export const useEditorStore = defineStore('editor', () => {
   // ===================== Actions =====================
 
   /** 🔥 增量合并全局数据 — 使用 lodash-es merge 深度合并 */
-  function mergeGlobalData(data: Record<string, any>): void {
+  function mergeGlobalData(data: DataPool): void {
     if (globalData.value === null) {
       globalData.value = data
     } else {
-      globalData.value = merge({}, globalData.value, data) as Record<string, any>
+      globalData.value = { ...globalData.value, ...data }
     }
     console.log('[editorStore] 全局数据已合并，顶层 keys:', Object.keys(globalData.value!).join(', '))
   }
 
   /** 🔥 全量替换全局数据 — 完全覆盖现有数据 */
-  function replaceGlobalData(data: Record<string, any>): void {
+  function replaceGlobalData(data: DataPool): void {
     globalData.value = data
     console.log('[editorStore] 全局数据已替换，顶层 keys:', Object.keys(data).join(', '))
+  }
+
+  function getFieldValues(field: string): any[] {
+    if (!globalData.value) return []
+    const values = globalData.value[field]
+    return Array.isArray(values) ? values : []
+  }
+
+  function isNumericField(field: string): boolean {
+    return isNumericArray(getFieldValues(field))
+  }
+
+  function getDefaultChartFields(): { xAxisField: string; yAxisField: string } {
+    const xAxisField = dimensionFields.value[0] ?? availableFields.value[0] ?? ''
+    const yAxisField =
+      numericFields.value.find((field) => field !== xAxisField) ??
+      availableFields.value.find((field) => field !== xAxisField) ??
+      xAxisField
+
+    return { xAxisField, yAxisField }
   }
 
   function addComponent(type: string, defaultProps?: Record<string, unknown>) {
@@ -264,25 +311,26 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function autoSelectFields() {
-    const fields = availableFields.value
-    if (fields.length === 0) return
     const comp = selectedComponent.value
     if (!comp) return
+    const defaults = getDefaultChartFields()
+    if (!defaults.xAxisField || !defaults.yAxisField) return
+
     const schema = comp.props.chartSchema as ChartSchema | undefined
     if (!schema) {
       comp.props.chartSchema = {
         chartType: 'bar',
-        xAxisField: fields[0],
-        yAxisField: fields[fields.length - 1],
+        xAxisField: defaults.xAxisField,
+        yAxisField: defaults.yAxisField,
       }
       return
     }
 
-    if (!schema.xAxisField || !fields.includes(schema.xAxisField)) {
-      schema.xAxisField = fields[0]
+    if (!schema.xAxisField || !availableFields.value.includes(schema.xAxisField)) {
+      schema.xAxisField = defaults.xAxisField
     }
-    if (!schema.yAxisField || !fields.includes(schema.yAxisField)) {
-      schema.yAxisField = fields[fields.length - 1]
+    if (!schema.yAxisField || !availableFields.value.includes(schema.yAxisField)) {
+      schema.yAxisField = defaults.yAxisField
     }
   }
 
@@ -291,7 +339,7 @@ export const useEditorStore = defineStore('editor', () => {
   function applySchema(schema: DashboardSchema): void {
     title.value = schema.title || '未命名大屏'
     components.value = schema.components ?? []
-    globalData.value = schema.globalData ?? null
+    globalData.value = normalizeDataPool(schema.globalData) ?? null
     selectedComponentId.value = null
     
     if (schema.canvas) {
@@ -437,6 +485,8 @@ export const useEditorStore = defineStore('editor', () => {
     canvasConfig,
     // getters
     availableFields,
+    numericFields,
+    dimensionFields,
     hasData,
     chartSchema,
     isChartReady,
@@ -445,6 +495,9 @@ export const useEditorStore = defineStore('editor', () => {
     // actions
     mergeGlobalData,
     replaceGlobalData,
+    getFieldValues,
+    isNumericField,
+    getDefaultChartFields,
     addComponent,
     updateComponentPosition,
     selectComponent,

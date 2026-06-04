@@ -1,8 +1,7 @@
-import { defineComponent, onMounted, ref, computed, nextTick, watch } from 'vue'
+import { defineComponent, onMounted, ref, computed, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { useEditorStore } from '../stores/editorStore'
+import { useEditorStore, type DataPool } from '../stores/editorStore'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { debounce } from 'lodash-es'
 import { Codemirror } from 'vue-codemirror'
 import { json } from '@codemirror/lang-json'
 import { javascript } from '@codemirror/lang-javascript'
@@ -11,6 +10,7 @@ import EditorHeader from '../components/EditorHeader'
 import DataProbe from '../components/DataProbe'
 import ChartRenderer from '../components/ChartRenderer'
 import ChartConfigPanel from '../components/ChartConfigPanel'
+import { validateDataPoolResult } from '../utils/dataPool'
 import './EditorView.css'
 
 /**
@@ -37,6 +37,11 @@ export default defineComponent({
 
     /** 全量编辑弹窗中的 JSON 文本 */
     const editGlobalDataJson = ref('')
+    const editGlobalDataMode = ref<'json' | 'js'>('json')
+    const editGlobalDataCode = ref(`// data 是当前编辑器里的全局数据对象。
+// 请返回新的公共数据池对象：{ 字段名: [...] }。
+return data;`)
+    const editGlobalDataError = ref<string | null>(null)
 
     const jsonExtension = json()
     const jsExtension = javascript()
@@ -131,13 +136,9 @@ return {
       configChartType.value = type
       configColor.value = '#409eff'
       configUseJS.value = false
-      if (store.availableFields.length > 0) {
-        configXField.value = store.availableFields[0]
-        configYField.value = store.availableFields[store.availableFields.length - 1] || store.availableFields[0]
-      } else {
-        configXField.value = ''
-        configYField.value = ''
-      }
+      const defaults = store.getDefaultChartFields()
+      configXField.value = defaults.xAxisField
+      configYField.value = defaults.yAxisField
       
       showConfigDialog.value = true
     }
@@ -152,13 +153,9 @@ return {
       configChartType.value = type
       configColor.value = '#409eff'
       configUseJS.value = false
-      if (store.availableFields.length > 0) {
-        configXField.value = store.availableFields[0]
-        configYField.value = store.availableFields[store.availableFields.length - 1] || store.availableFields[0]
-      } else {
-        configXField.value = ''
-        configYField.value = ''
-      }
+      const defaults = store.getDefaultChartFields()
+      configXField.value = defaults.xAxisField
+      configYField.value = defaults.yAxisField
       
       showConfigDialog.value = true
     }
@@ -234,40 +231,48 @@ return {
       }
     })
 
-    const originalGlobalDataBackup = ref<string | null>(null)
-
     /** 打开全量编辑弹窗 — 以当前 globalData 序列化值初始化编辑器 */
     const openEditGlobalData = () => {
-      originalGlobalDataBackup.value = JSON.stringify(store.globalData)
       editGlobalDataJson.value = JSON.stringify(store.globalData, null, 2)
+      editGlobalDataMode.value = 'json'
+      editGlobalDataError.value = null
       showEditGlobalDataDialog.value = true
     }
 
-    const debouncedApplyData = debounce((val: string) => {
+    const parseEditJson = (): unknown => {
+      if (!editGlobalDataJson.value.trim()) {
+        throw new Error('JSON 不能为空')
+      }
+      return JSON.parse(editGlobalDataJson.value)
+    }
+
+    const getEditedDataPool = (): DataPool | null => {
+      editGlobalDataError.value = null
+      let result: unknown
+
       try {
-        const parsed = JSON.parse(val)
-        if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-          store.replaceGlobalData(parsed)
+        const parsed = parseEditJson()
+        if (editGlobalDataMode.value === 'js') {
+          const fn = new Function('data', editGlobalDataCode.value)
+          result = fn(parsed)
         } else {
-          ElMessage.error('数据必须是一个 JSON 对象 (Object)')
+          result = parsed
         }
       } catch (err) {
-        ElMessage.error('JSON 格式错误: ' + (err instanceof Error ? err.message : String(err)))
+        editGlobalDataError.value = (editGlobalDataMode.value === 'js' ? 'JS 执行异常: ' : 'JSON 格式错误: ') +
+          (err instanceof Error ? err.message : String(err))
+        return null
       }
-    }, 800)
 
-    watch(editGlobalDataJson, (newVal) => {
-      if (showEditGlobalDataDialog.value) {
-        debouncedApplyData(newVal)
+      const validation = validateDataPoolResult(result)
+      if (!validation.ok) {
+        editGlobalDataError.value = validation.message
+        return null
       }
-    })
-
-    const onEditDialogClose = () => {
-      // 如果未保存就关闭，还原备份
-      if (originalGlobalDataBackup.value !== null) {
-        store.replaceGlobalData(JSON.parse(originalGlobalDataBackup.value))
-        originalGlobalDataBackup.value = null
+      if (validation.warning) {
+        editGlobalDataError.value = validation.warning
       }
+      return validation.data
     }
 
     /** 格式化编辑弹窗中的 JSON */
@@ -280,11 +285,21 @@ return {
       }
     }
 
+    const previewEditJsResult = () => {
+      const data = getEditedDataPool()
+      if (!data) return
+      editGlobalDataJson.value = JSON.stringify(data, null, 2)
+      editGlobalDataMode.value = 'json'
+      ElMessage.success('JS 结果已写入左侧 JSON 草稿，确认后可保存替换')
+    }
+
     /** 保存并全量替换全局数据 */
     const saveAndReplace = () => {
-      ElMessageBox.confirm('确定保存并覆盖全量数据吗？', '提示', { type: 'warning' }).then(() => {
-        // 清空备份，防止触发回滚
-        originalGlobalDataBackup.value = null
+      const data = getEditedDataPool()
+      if (!data) return
+
+      ElMessageBox.confirm('确定保存并覆盖全量数据吗？这会替换当前大屏的整个公共数据池。', '提示', { type: 'warning' }).then(() => {
+        store.replaceGlobalData(data)
         ElMessage.success('全局数据已全量替换')
         showEditGlobalDataDialog.value = false
       }).catch(() => {})
@@ -343,7 +358,7 @@ return {
                                 onClick={() => { showProbeDialog.value = true }}
                                 style={{ width: '100%' }}
                               >
-                                初始化全局数据
+                                导入数据源
                               </el-button>
                             </div>
                           </div>
@@ -375,7 +390,7 @@ return {
                                 onClick={() => { showProbeDialog.value = true }}
                                 style={{ width: '100%' }}
                               >
-                                🔄 重新获取数据
+                                导入更多数据源
                               </el-button>
                               <el-button
                                 type="default"
@@ -525,24 +540,55 @@ return {
           model-value={showEditGlobalDataDialog.value}
           onUpdate:model-value={(val: boolean) => { 
             if (!val) {
-              onEditDialogClose()
               showEditGlobalDataDialog.value = false 
             }
           }}
           title="✏️ 全量编辑全局数据"
-          width="700px"
-          top="5vh"
+          width="92vw"
+          top="2vh"
+          draggable
           destroy-on-close
           close-on-click-modal={false}
           class="edit-global-data-dialog"
         >
           <div class="edit-global-data-body">
-            <div class="edit-global-data-editor">
-              <Codemirror
-                model-value={editGlobalDataJson.value}
-                onUpdate:model-value={(v: string) => { editGlobalDataJson.value = v }}
-                extensions={[jsonExtension, themeExtension]}
-              />
+            <div class="edit-global-data-toolbar">
+              <el-radio-group
+                model-value={editGlobalDataMode.value}
+                onUpdate:model-value={(v: 'json' | 'js') => { editGlobalDataMode.value = v }}
+              >
+                <el-radio-button label="json">JSON 全量编辑</el-radio-button>
+                <el-radio-button label="js">JS 筛选</el-radio-button>
+              </el-radio-group>
+              {editGlobalDataError.value && (
+                <el-alert title={editGlobalDataError.value} type={editGlobalDataError.value.includes('长度不一致') ? 'warning' : 'error'} closable={false} show-icon />
+              )}
+            </div>
+
+            <div class={['edit-global-data-grid', editGlobalDataMode.value === 'json' && 'edit-global-data-grid--single']}>
+              <section class="edit-global-data-pane">
+                <div class="edit-global-data-pane__header">公共数据池 JSON 草稿</div>
+                <div class="edit-global-data-editor">
+                  <Codemirror
+                    model-value={editGlobalDataJson.value}
+                    onUpdate:model-value={(v: string) => { editGlobalDataJson.value = v }}
+                    extensions={[jsonExtension, themeExtension]}
+                  />
+                </div>
+              </section>
+
+              {editGlobalDataMode.value === 'js' && (
+                <section class="edit-global-data-pane">
+                  <div class="edit-global-data-pane__header">JS 筛选器</div>
+                  <div class="edit-global-data-editor">
+                    <Codemirror
+                      model-value={editGlobalDataCode.value}
+                      onUpdate:model-value={(v: string) => { editGlobalDataCode.value = v }}
+                      extensions={[jsExtension, themeExtension]}
+                    />
+                  </div>
+                </section>
+              )}
             </div>
           </div>
 
@@ -555,12 +601,18 @@ return {
             justifyContent: 'space-between',
             alignItems: 'center',
           }}>
-            <el-button icon="Operation" onClick={formatEditJson}>
-              格式化
-            </el-button>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <el-button icon="Operation" onClick={formatEditJson}>
+                格式化 JSON
+              </el-button>
+              {editGlobalDataMode.value === 'js' && (
+                <el-button type="warning" icon="View" onClick={previewEditJsResult}>
+                  预览 JS 结果
+                </el-button>
+              )}
+            </div>
             <div style={{ display: 'flex', gap: '10px' }}>
               <el-button onClick={() => { 
-                onEditDialogClose()
                 showEditGlobalDataDialog.value = false 
               }}>
                 取消
@@ -573,11 +625,53 @@ return {
 
           {/* 嵌入式样式 */}
           <style>{`
+            .el-dialog.edit-global-data-dialog {
+              max-width: 1180px;
+              min-width: 760px;
+              resize: both;
+              overflow: hidden;
+            }
+            .edit-global-data-dialog .el-dialog__body {
+              padding-top: 12px;
+            }
             .edit-global-data-body {
               display: flex;
               flex-direction: column;
-              height: 50vh;
-              min-height: 320px;
+              height: 72vh;
+              min-height: 540px;
+            }
+            .edit-global-data-toolbar {
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 16px;
+              margin-bottom: 12px;
+              min-height: 34px;
+            }
+            .edit-global-data-toolbar .el-alert {
+              flex: 1;
+              padding: 4px 10px;
+            }
+            .edit-global-data-grid {
+              flex: 1;
+              min-height: 0;
+              display: grid;
+              grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+              gap: 12px;
+            }
+            .edit-global-data-grid--single {
+              grid-template-columns: minmax(0, 1fr);
+            }
+            .edit-global-data-pane {
+              min-height: 0;
+              display: flex;
+              flex-direction: column;
+            }
+            .edit-global-data-pane__header {
+              font-size: 12px;
+              font-weight: 700;
+              color: #606266;
+              margin-bottom: 6px;
             }
             .edit-global-data-editor {
               flex: 1;

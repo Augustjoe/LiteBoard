@@ -58,5 +58,26 @@
       "createdAt": "2026-05-20T07:50:24.356Z",
       "updatedAt": "2026-05-20T07:50:24.364Z"
     }
+  },
+  {
+    "id": "0464ece6-a7c8-4ecb-b2e3-d60acf5f7233",
+    "name": "测试",
+    "description": "测试",
+    "cover": "linear-gradient(135deg, #f5576c 0%, #ff6f61 100%)",
+    "createdAt": "2026-06-04T14:22:29.714Z",
+    "updatedAt": "2026-06-04T14:22:29.714Z",
+    "schema": {
+      "version": "1.0.0",
+      "title": "测试",
+      "canvas": {
+        "width": 1920,
+        "height": 1080,
+        "background": "#f0f2f5"
+      },
+      "components": [],
+      "assets": [],
+      "createdAt": "2026-06-04T14:22:29.715Z",
+      "updatedAt": "2026-06-04T14:22:29.715Z"
+    }
   }
 ]

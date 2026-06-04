@@ -239,7 +239,7 @@ export default defineComponent({
                   <div style={{ marginTop: '4px' }}>
                     可用字段：{store.availableFields.length > 0
                       ? store.availableFields.join(', ')
-                      : '(无顶层字段)'}
+                      : '(无字段数组)'}
                   </div>
                 </div>
               )}
@@ -302,10 +302,10 @@ export default defineComponent({
                       <el-select
                         model-value={schema.value.xAxisField}
                         onUpdate:model-value={onXFieldChange}
-                        placeholder={store.globalData ? '选择分类 / 维度字段' : '请先初始化全局数据'}
+                        placeholder={store.availableFields.length > 0 ? '选择分类 / 维度字段' : '请先写入字段数组数据池'}
                         style={{ width: '100%' }}
                         clearable
-                        disabled={!store.globalData}
+                        disabled={store.availableFields.length === 0}
                       >
                         {store.availableFields.map((field) => (
                           <el-option key={field} label={field} value={field} />
@@ -318,10 +318,10 @@ export default defineComponent({
                       <el-select
                         model-value={schema.value.yAxisField}
                         onUpdate:model-value={onYFieldChange}
-                        placeholder={store.globalData ? '选择数据 / 指标字段' : '请先初始化全局数据'}
+                        placeholder={store.availableFields.length > 0 ? '选择数据 / 指标字段' : '请先写入字段数组数据池'}
                         style={{ width: '100%' }}
                         clearable
-                        disabled={!store.globalData}
+                        disabled={store.availableFields.length === 0}
                       >
                         {store.availableFields.map((field) => (
                           <el-option key={field} label={field} value={field} />

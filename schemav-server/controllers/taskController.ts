@@ -19,8 +19,11 @@ export interface ChartSchema {
   chartType: 'bar' | 'line';
   xAxisField: string;
   yAxisField: string;
-  assetId?: string;
   customOption?: string;
+  title?: string;
+  color?: string;
+  useCustomDataCode?: boolean;
+  customDataCode?: string;
 }
 
 export interface ComponentInstance {
@@ -29,13 +32,6 @@ export interface ComponentInstance {
   position: ComponentPosition;
   zIndex: number;
   props: Record<string, unknown>;
-}
-
-export interface DataAsset {
-  id: string;
-  name: string;
-  fields: string[];
-  data: Record<string, unknown>[];
 }
 
 export interface DashboardSchema {
@@ -47,7 +43,7 @@ export interface DashboardSchema {
     background: string;
   };
   components: ComponentInstance[];
-  assets: DataAsset[];
+  globalData: Record<string, unknown[]> | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -113,7 +109,7 @@ function createDefaultSchema(title: string): DashboardSchema {
       background: '#f0f2f5',
     },
     components: [],
-    assets: [],
+    globalData: null,
     createdAt: now,
     updatedAt: now,
   };

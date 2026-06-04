@@ -1,11 +1,12 @@
 import { defineComponent, ref, watch, type PropType, nextTick, computed } from 'vue'
-import { useEditorStore } from '../stores/editorStore'
-import { ElMessage } from 'element-plus'
+import { useEditorStore, type DataPool } from '../stores/editorStore'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Codemirror } from 'vue-codemirror'
 import { json } from '@codemirror/lang-json'
 import { javascript } from '@codemirror/lang-javascript'
 import { oneDark } from '@codemirror/theme-one-dark'
 import type { EditorView as CMEditorView } from '@codemirror/view'
+import { getOverwriteFields, validateDataPoolResult, type DataPoolValidation } from '../utils/dataPool'
 
 /**
  * DataProbe — 超级探针弹窗（v2：上下分栏一站式）
@@ -18,9 +19,9 @@ import type { EditorView as CMEditorView } from '@codemirror/view'
  */
 
 /** 默认 JS 过滤器代码 */
-const DEFAULT_FILTER_CODE = `// 请编写 JS 代码清洗数据。原始数据变量为 res，必须 return 一个纯对象 (Object)。
-// 示例：return { ...res };
-return { ...res };`
+const DEFAULT_FILTER_CODE = `// res 是接口返回的原始数据。
+// 请返回公共数据池对象：{ 字段名: [...] }。
+return res;`
 
 export default defineComponent({
   name: 'DataProbe',
@@ -64,6 +65,11 @@ export default defineComponent({
     const executing = ref(false)
     const showPreviewDialog = ref(false)
     const previewResultJson = ref('')
+    const pendingImportData = ref<DataPool | null>(null)
+    const pendingImportWarning = ref<string | null>(null)
+    const pendingOverwriteFields = computed(() => (
+      pendingImportData.value ? getOverwriteFields(store.globalData, pendingImportData.value) : []
+    ))
 
     // ==================== CodeMirror 视图引用（用于格式化） ====================
     let manualEditorView: CMEditorView | null = null
@@ -95,6 +101,61 @@ export default defineComponent({
     }
     const removeHeader = (index: number) => {
       headerPairs.value.splice(index, 1)
+    }
+
+    const commitDataPool = async (data: DataPool, warning: string | null) => {
+      const overwriteFields = getOverwriteFields(store.globalData, data)
+      if (overwriteFields.length > 0) {
+        await ElMessageBox.confirm(
+          `以下字段已存在，导入后会被覆盖：${overwriteFields.join(', ')}。是否继续导入？`,
+          '确认覆盖字段',
+          {
+            type: 'warning',
+            confirmButtonText: '确认导入',
+            cancelButtonText: '取消',
+          },
+        )
+      }
+
+      store.mergeGlobalData(data)
+      if (warning) {
+        ElMessage.warning(warning)
+      } else if (overwriteFields.length > 0) {
+        ElMessage.success(`数据已导入，已覆盖 ${overwriteFields.length} 个字段`)
+      } else {
+        ElMessage.success('数据已导入全局数据池')
+      }
+      props.onClose()
+    }
+
+    const runFilter = (): DataPoolValidation => {
+      if (rawData.value === null) {
+        return { ok: false, message: '无可用的原始数据，请先获取或粘贴数据' }
+      }
+
+      try {
+        const fn = new Function('res', filterCode.value)
+        return validateDataPoolResult(fn(rawData.value))
+      } catch (err) {
+        return { ok: false, message: '代码执行异常: ' + (err instanceof Error ? err.message : String(err)) }
+      }
+    }
+
+    const preparePreview = (validation: Extract<DataPoolValidation, { ok: true }>) => {
+      pendingImportData.value = validation.data
+      pendingImportWarning.value = validation.warning
+      previewResultJson.value = JSON.stringify(validation.data, null, 2)
+      showPreviewDialog.value = true
+    }
+
+    const importPreviewResult = async () => {
+      if (!pendingImportData.value) return
+      try {
+        await commitDataPool(pendingImportData.value, pendingImportWarning.value)
+        showPreviewDialog.value = false
+      } catch {
+        // 用户取消覆盖确认时保持预览弹窗打开，方便继续检查结果。
+      }
     }
 
     // ==================== 发送远程探针 ====================
@@ -143,7 +204,7 @@ export default defineComponent({
     }
 
     // ==================== 手动模式：校验 JSON 并直接合并至全局数据 ====================
-    const onParseAndMergeManual = () => {
+    const onParseAndMergeManual = async () => {
       manualError.value = null
 
       if (!manualJson.value.trim()) {
@@ -159,16 +220,18 @@ export default defineComponent({
         return
       }
 
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        const typeLabel = Array.isArray(parsed) ? 'Array' : (parsed === null ? 'null' : typeof parsed)
-        manualError.value = `数据必须是纯对象格式 (Plain Object)，不能是 ${typeLabel}`
+      const validation = validateDataPoolResult(parsed)
+      if (!validation.ok) {
+        manualError.value = validation.message
         return
       }
 
       // 校验通过，直接增量合并
-      store.mergeGlobalData(parsed as Record<string, any>)
-      ElMessage.success('数据已成功合并至全局数据')
-      props.onClose()
+      try {
+        await commitDataPool(validation.data, validation.warning)
+      } catch {
+        // 用户取消覆盖确认。
+      }
     }
 
     // ==================== 执行 JS 过滤器并合并到全局数据 ====================
@@ -180,37 +243,18 @@ export default defineComponent({
         // 延迟一下让 loading 状态可见
         await nextTick()
 
-        if (rawData.value === null) {
-          filterError.value = '无可用的原始数据，请先在【远程获取】或【手动添加】中获取数据'
+        const validation = runFilter()
+        if (!validation.ok) {
+          ElMessage.error(validation.message)
+          filterError.value = validation.message
           return
         }
 
-        let result: unknown
         try {
-          const fn = new Function('res', filterCode.value)
-          result = fn(rawData.value)
-        } catch (err) {
-          filterError.value = '代码执行异常: ' + (err instanceof Error ? err.message : String(err))
-          return
+          await commitDataPool(validation.data, validation.warning)
+        } catch {
+          // 用户取消覆盖确认。
         }
-
-        // 强校验：返回值必须是纯对象
-        if (typeof result !== 'object' || result === null || Array.isArray(result)) {
-          const typeLabel = Array.isArray(result) ? 'Array' : (result === null ? 'null' : typeof result)
-          ElMessage({
-            message: `返回结果必须是 <strong>Object</strong> 类型，不能是 <strong>${typeLabel}</strong>`,
-            dangerouslyUseHTMLString: true,
-            type: 'error',
-            duration: 5000,
-          })
-          filterError.value = `返回值必须是纯对象格式 (Plain Object)，不能是 ${typeLabel}！`
-          return
-        }
-
-        // 校验通过，增量合并
-        store.mergeGlobalData(result as Record<string, any>)
-        ElMessage.success('数据已成功合并至全局数据')
-        props.onClose()
       } finally {
         executing.value = false
       }
@@ -219,26 +263,15 @@ export default defineComponent({
     // ==================== 预览 JS 过滤器执行结果 ====================
     const onPreviewFilter = async () => {
       filterError.value = null
-      if (rawData.value === null) {
-        filterError.value = '无可用的原始数据，请先在【远程获取】或【手动添加】中获取数据'
+      const validation = runFilter()
+      if (!validation.ok) {
+        filterError.value = validation.message
         return
       }
-
-      try {
-        const fn = new Function('res', filterCode.value)
-        const result = fn(rawData.value)
-        
-        if (typeof result !== 'object' || result === null) {
-          const typeLabel = result === null ? 'null' : typeof result
-          filterError.value = `返回值必须是对象格式 (Object/Array)，不能是 ${typeLabel}！`
-          return
-        }
-
-        previewResultJson.value = JSON.stringify(result, null, 2)
-        showPreviewDialog.value = true
-      } catch (err) {
-        filterError.value = '代码执行异常: ' + (err instanceof Error ? err.message : String(err))
+      if (validation.warning) {
+        filterError.value = validation.warning
       }
+      preparePreview(validation)
     }
 
     // ==================== 弹窗打开时重置状态 ====================
@@ -262,6 +295,8 @@ export default defineComponent({
           executing.value = false
           showPreviewDialog.value = false
           previewResultJson.value = ''
+          pendingImportData.value = null
+          pendingImportWarning.value = null
         }
       },
     )
@@ -270,8 +305,8 @@ export default defineComponent({
       <el-dialog
         model-value={props.visible}
         onUpdate:model-value={(val: boolean) => { if (!val) props.onClose() }}
-        title="🔍 超级探针 — 数据获取与过滤"
-        width="900px"
+        title="🔍 导入数据源 — 获取、筛选并写入全局数据池"
+        width="1040px"
         top="3vh"
         destroy-on-close
         close-on-click-modal={false}
@@ -365,7 +400,7 @@ export default defineComponent({
                     </el-button>
                     {remoteResult.value && (
                       <span style={{ fontSize: '13px', color: '#67c23a', fontWeight: 600 }}>
-                        ✅ 数据获取成功
+                        ✅ 数据获取成功，可继续编写 JS 筛选
                       </span>
                     )}
                   </div>
@@ -393,7 +428,7 @@ export default defineComponent({
                       onUpdate:model-value={(v: string) => { manualJson.value = v }}
                       extensions={[jsonExtension, themeExtension]}
                       onReady={onManualReady}
-                      placeholder='粘贴你的 JSON 数据，例如：[{"name": "A", "value": 100}] 或 {"key1": 10, "key2": 20}'
+                      placeholder='粘贴公共数据池对象，例如：{"name":["A","B"],"value":[100,200]}'
                     />
                   </div>
 
@@ -426,7 +461,7 @@ export default defineComponent({
 
               {/* JS 过滤器 */}
               <div class="probe-output-pane">
-                <div class="probe-output-pane__header">🧹 JS 过滤器</div>
+                <div class="probe-output-pane__header">🧹 JS 过滤器（返回字段数组对象）</div>
                 <div class="probe-codemirror-wrapper">
                   <Codemirror
                     model-value={filterCode.value}
@@ -457,7 +492,7 @@ export default defineComponent({
               onClick={onParseAndMergeManual}
               disabled={!manualJson.value.trim()}
             >
-              校验并直接合并至全局数据
+              校验并导入
             </el-button>
           ) : (
             <div style={{ display: 'flex', gap: '10px' }}>
@@ -467,7 +502,7 @@ export default defineComponent({
                 onClick={onPreviewFilter}
                 disabled={rawData.value === null}
               >
-                预览过滤器结果
+                预览结果
               </el-button>
               <el-button
                 type="primary"
@@ -476,7 +511,7 @@ export default defineComponent({
                 loading={executing.value}
                 disabled={rawData.value === null}
               >
-                执行并合并至全局数据
+                校验并导入
               </el-button>
             </div>
           )}
@@ -486,13 +521,26 @@ export default defineComponent({
         <el-dialog
           model-value={showPreviewDialog.value}
           onUpdate:model-value={(val: boolean) => { if (!val) showPreviewDialog.value = false }}
-          title="🧹 过滤器执行结果预览"
-          width="600px"
-          top="10vh"
+          title="🧹 筛选结果预览"
+          width="760px"
+          top="6vh"
           append-to-body
           destroy-on-close
         >
-          <div style={{ height: '40vh', border: '1px solid #dcdfe6', borderRadius: '6px', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {pendingImportWarning.value && (
+              <el-alert title={pendingImportWarning.value} type="warning" closable={false} show-icon />
+            )}
+            {pendingOverwriteFields.value.length > 0 && (
+              <el-alert
+                title={`将覆盖已有字段：${pendingOverwriteFields.value.join(', ')}`}
+                type="warning"
+                closable={false}
+                show-icon
+              />
+            )}
+          </div>
+          <div style={{ height: '52vh', marginTop: '12px', border: '1px solid #dcdfe6', borderRadius: '6px', overflow: 'hidden' }}>
             <Codemirror
               model-value={previewResultJson.value}
               extensions={[jsonExtension, themeExtension]}
@@ -500,8 +548,9 @@ export default defineComponent({
               style={{ height: '100%' }}
             />
           </div>
-          <div style={{ marginTop: '14px', textAlign: 'right' }}>
-            <el-button type="primary" onClick={() => { showPreviewDialog.value = false }}>确定</el-button>
+          <div style={{ marginTop: '14px', textAlign: 'right', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+            <el-button onClick={() => { showPreviewDialog.value = false }}>继续编辑 JS</el-button>
+            <el-button type="primary" icon="Upload" onClick={importPreviewResult}>导入到全局数据池</el-button>
           </div>
         </el-dialog>
 

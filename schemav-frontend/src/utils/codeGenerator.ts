@@ -30,6 +30,10 @@ function serializeGlobalData(data: Record<string, any> | null): string {
   }
 }
 
+function jsString(value: string): string {
+  return JSON.stringify(value)
+}
+
 /**
  * 为单个图表组件构建 merge 后的 ECharts Option 代码字符串
  * 数据从 globalData[字段] 中提取
@@ -40,36 +44,41 @@ function buildChartOptionCode(comp: ComponentInstance): string {
     return '{}'
   }
 
-  const { xAxisField, yAxisField, chartType } = schema
+  const { xAxisField, yAxisField, chartType, title, color } = schema
+  const xField = jsString(xAxisField)
+  const yField = jsString(yAxisField)
+  const seriesName = yAxisField
+  const titleText = title || `${chartType === 'bar' ? '柱状图' : '折线图'} — ${seriesName}`
 
   // 基础配置 — 与 ComponentWrapper 中的 baseOption 保持一致
   const baseOptionLines: string[] = [
     `  title: {`,
-    `    text: '${chartType === 'bar' ? '柱状图' : '折线图'} — ${yAxisField}',`,
+    `    text: ${jsString(titleText)},`,
     `    left: 'center',`,
     `    top: 8,`,
     `    textStyle: { fontSize: 16, fontWeight: 600, color: '#303133' },`,
     `  },`,
+    color ? `  color: [${jsString(color)}],` : '',
     `  tooltip: { trigger: 'axis' },`,
-    `  legend: { data: ['${yAxisField}'], bottom: 8 },`,
+    `  legend: { data: [${jsString(seriesName)}], bottom: 8 },`,
     `  grid: { left: '5%', right: '5%', top: 48, bottom: 48, containLabel: true },`,
     `  xAxis: {`,
     `    type: 'category',`,
-    `    data: (Array.isArray(globalData['${xAxisField}']) ? globalData['${xAxisField}'] : [globalData['${xAxisField}']]).map(item => String(item ?? '')),`,
-    `    axisLabel: { rotate: globalData['${xAxisField}']?.length > 8 ? 30 : 0, fontSize: 11 },`,
+    `    data: (Array.isArray(globalData?.[${xField}]) ? globalData[${xField}] : []).map(item => String(item ?? '')),`,
+    `    axisLabel: { rotate: globalData?.[${xField}]?.length > 8 ? 30 : 0, fontSize: 11 },`,
     `  },`,
-    `  yAxis: { type: 'value', name: '${yAxisField}' },`,
+    `  yAxis: { type: 'value', name: ${jsString(seriesName)} },`,
     `  series: [{`,
-    `    name: '${yAxisField}',`,
-    `    type: '${chartType}',`,
-    `    data: (Array.isArray(globalData['${yAxisField}']) ? globalData['${yAxisField}'] : [globalData['${yAxisField}']]).map(item => {`,
+    `    name: ${jsString(seriesName)},`,
+    `    type: ${jsString(chartType)},`,
+    `    data: (Array.isArray(globalData?.[${yField}]) ? globalData[${yField}] : []).map(item => {`,
     `      const val = Number(item)`,
     `      return Number.isNaN(val) ? 0 : val`,
     `    }),`,
     `    emphasis: { focus: 'series' },`,
     `    animationDelay: (idx) => idx * 50,`,
     `  }],`,
-  ]
+  ].filter(Boolean)
 
   // 如果有 customOption，尝试生成 merge 后的代码
   const customStr = schema.customOption
