@@ -1,4 +1,4 @@
-import { defineComponent, ref } from 'vue'
+import { computed, defineComponent, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useEditorStore } from '../stores/editorStore'
@@ -8,7 +8,7 @@ import { generateVueCode, downloadVueFile } from '../utils/codeGenerator'
  * EditorHeader — 顶部导航栏（全栈重构）
  *
  * 变更：
- * - 【保存项目】→ 调用 store.saveTask() 持久化到后端
+ * - 【保存仪表盘】→ 调用 store.saveTask() 持久化到后端
  * - 新增【返回大厅】按钮 → router.push('/')
  * - 其余功能保持不变
  */
@@ -22,6 +22,21 @@ export default defineComponent({
     const codeDialogVisible = ref(false)
     const generatedCode = ref('')
     const copySuccess = ref(false)
+
+    const saveLabel = computed(() => {
+      if (store.saveStatus === 'saving') return '保存中...'
+      if (store.saveStatus === 'dirty') return '未保存'
+      if (store.saveStatus === 'saved') return '已保存'
+      if (store.saveStatus === 'error') return '保存失败'
+      return '保存仪表盘'
+    })
+
+    const saveTagType = computed(() => {
+      if (store.saveStatus === 'dirty') return 'warning'
+      if (store.saveStatus === 'saved') return 'success'
+      if (store.saveStatus === 'error') return 'danger'
+      return 'info'
+    })
 
     const onExportCode = () => {
       const schema = store.currentSchema
@@ -68,7 +83,7 @@ export default defineComponent({
       }
       const ok = await store.saveTask()
       if (ok) {
-        ElMessage.success('项目已保存到服务器')
+        ElMessage.success('仪表盘已保存')
       } else {
         ElMessage.error('保存失败，请重试')
       }
@@ -139,7 +154,7 @@ export default defineComponent({
           <el-input
             model-value={store.title}
             onUpdate:model-value={(val: string) => store.setTitle(val)}
-            placeholder="项目名称"
+            placeholder="仪表盘名称"
             size="small"
             style={{ width: '200px' }}
             clearable
@@ -148,13 +163,19 @@ export default defineComponent({
 
         {/* 右侧：操作按钮组 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {store.saveStatus !== 'idle' && (
+            <el-tag type={saveTagType.value} effect="light">
+              {saveLabel.value}
+            </el-tag>
+          )}
           <el-button
             type="primary"
             icon="FolderChecked"
             size="default"
             onClick={onSave}
+            loading={store.saveStatus === 'saving'}
           >
-            保存项目
+            保存仪表盘
           </el-button>
 
           <el-button
@@ -175,7 +196,7 @@ export default defineComponent({
             size="default"
             onClick={onExportCode}
           >
-            导出代码
+            导出 Vue
           </el-button>
 
           <el-button
@@ -192,7 +213,7 @@ export default defineComponent({
         {/* ==================== 导出代码对话框 ==================== */}
         <el-dialog
           v-model={codeDialogVisible.value}
-          title="📤 导出 Vue 组件代码"
+          title="📤 导出仪表盘 Vue 组件"
           width="80%"
           top="5vh"
           close-on-click-modal={false}

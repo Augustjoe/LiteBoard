@@ -9,18 +9,18 @@ import type { EditorView as CMEditorView } from '@codemirror/view'
 import { getOverwriteFields, validateDataPoolResult, type DataPoolValidation } from '../utils/dataPool'
 
 /**
- * DataProbe — 超级探针弹窗（v2：上下分栏一站式）
+ * DataProbe — 当前数据集导入弹窗（v2：上下分栏一站式）
  *
  * 设计理念：
  * - 取消分步，上下分栏布局
  * - 上半区：输入源（远程获取 / 手动粘贴，手动粘贴使用 vue-codemirror JSON）
  * - 下半区：数据预览与过滤（原始数据只读 + JS 过滤器）
- * - 执行成功后调用 store.mergeGlobalData() 增量合并
+ * - 执行成功后调用 store.mergeGlobalData() 增量合并到当前仪表盘数据集
  */
 
 /** 默认 JS 过滤器代码 */
 const DEFAULT_FILTER_CODE = `// res 是接口返回的原始数据。
-// 请返回公共数据池对象：{ 字段名: [...] }。
+// 请返回当前数据集对象：{ 字段名或数据集名: [...] }。
 return res;`
 
 export default defineComponent({
@@ -123,7 +123,7 @@ export default defineComponent({
       } else if (overwriteFields.length > 0) {
         ElMessage.success(`数据已导入，已覆盖 ${overwriteFields.length} 个字段`)
       } else {
-        ElMessage.success('数据已导入全局数据池')
+        ElMessage.success('数据已导入当前数据集')
       }
       props.onClose()
     }
@@ -203,7 +203,7 @@ export default defineComponent({
       }
     }
 
-    // ==================== 手动模式：校验 JSON 并直接合并至全局数据 ====================
+    // ==================== 手动模式：校验 JSON 并直接合并至当前数据集 ====================
     const onParseAndMergeManual = async () => {
       manualError.value = null
 
@@ -234,7 +234,7 @@ export default defineComponent({
       }
     }
 
-    // ==================== 执行 JS 过滤器并合并到全局数据 ====================
+    // ==================== 执行 JS 过滤器并合并到当前数据集 ====================
     const executeAndMerge = async () => {
       filterError.value = null
       executing.value = true
@@ -305,7 +305,7 @@ export default defineComponent({
       <el-dialog
         model-value={props.visible}
         onUpdate:model-value={(val: boolean) => { if (!val) props.onClose() }}
-        title="🔍 导入数据源 — 获取、筛选并写入全局数据池"
+        title="🔍 创建/更新当前数据集"
         width="1040px"
         top="3vh"
         destroy-on-close
@@ -428,7 +428,7 @@ export default defineComponent({
                       onUpdate:model-value={(v: string) => { manualJson.value = v }}
                       extensions={[jsonExtension, themeExtension]}
                       onReady={onManualReady}
-                      placeholder='粘贴公共数据池对象，例如：{"name":["A","B"],"value":[100,200]}'
+                      placeholder='粘贴当前数据集对象，例如：{"name":["A","B"],"value":[100,200]}'
                     />
                   </div>
 
@@ -461,7 +461,7 @@ export default defineComponent({
 
               {/* JS 过滤器 */}
               <div class="probe-output-pane">
-                <div class="probe-output-pane__header">🧹 JS 过滤器（返回字段数组对象）</div>
+                <div class="probe-output-pane__header">🧹 JS 过滤器（返回当前数据集对象）</div>
                 <div class="probe-codemirror-wrapper">
                   <Codemirror
                     model-value={filterCode.value}
@@ -550,7 +550,7 @@ export default defineComponent({
           </div>
           <div style={{ marginTop: '14px', textAlign: 'right', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
             <el-button onClick={() => { showPreviewDialog.value = false }}>继续编辑 JS</el-button>
-            <el-button type="primary" icon="Upload" onClick={importPreviewResult}>导入到全局数据池</el-button>
+            <el-button type="primary" icon="Upload" onClick={importPreviewResult}>导入到当前数据集</el-button>
           </div>
         </el-dialog>
 

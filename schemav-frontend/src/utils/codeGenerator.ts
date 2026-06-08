@@ -1,30 +1,8 @@
-/**
- * generateVueCode — 自动化出码引擎（全局数据湖升级）
- *
- * 将 DashboardSchema 转换为可独立运行的 Vue SFC 代码字符串。
- *
- * 输出特点：
- * - <template>：绝对定位容器 + 按 zIndex 排序的图表组件
- * - <script setup>：自动 import vue-echarts、echarts 核心，以及 merge 后的 option
- * - <style>：scoped 基础样式
- *
- * 全局数据湖升级：
- * - 从 schema.globalData 生成内联数据常量 const globalData = { ... }
- * - 图表 option 引用 globalData[字段] 进行数据提取
- * - 不再依赖 assets/assetId
- *
- * merge 逻辑与 ComponentWrapper 保持一致：
- * baseOption + JSON.parse(customOption) → lodash merge
- */
-import type { DashboardSchema, ComponentInstance, ChartSchema } from '../stores/editorStore'
+import type { ChartSchema, ComponentInstance, DashboardSchema, TableSchema, TextSchema } from '../stores/editorStore'
 
-/**
- * 将 globalData 序列化为内联 JSON 常量
- */
-function serializeGlobalData(data: Record<string, any> | null): string {
-  if (!data) return 'null'
+function serializeJson(value: unknown): string {
   try {
-    return JSON.stringify(data, null, 2)
+    return JSON.stringify(value, null, 2)
   } catch {
     return 'null'
   }
@@ -34,123 +12,266 @@ function jsString(value: string): string {
   return JSON.stringify(value)
 }
 
-/**
- * 为单个图表组件构建 merge 后的 ECharts Option 代码字符串
- * 数据从 globalData[字段] 中提取
- */
-function buildChartOptionCode(comp: ComponentInstance): string {
-  const schema = comp.props.chartSchema as ChartSchema | undefined
-  if (!schema || !schema.xAxisField || !schema.yAxisField) {
-    return '{}'
+function safeVarName(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_]/g, '_')
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function isChartComponent(comp: ComponentInstance): boolean {
+  return comp.type.startsWith('chart-')
+}
+
+function buildWrapperStyle(comp: ComponentInstance): string {
+  const { position } = comp
+  return [
+    'position: absolute',
+    `left: ${position.x}px`,
+    `top: ${position.y}px`,
+    `width: ${position.w}px`,
+    `height: ${position.h}px`,
+    `z-index: ${comp.zIndex}`,
+    'background: #fff',
+    'border-radius: 8px',
+    'box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08)',
+    'overflow: hidden',
+  ].join('; ')
+}
+
+function buildTextTemplate(comp: ComponentInstance): string[] {
+  const schema = (comp.props.textSchema as TextSchema | undefined) ?? {
+    content: '文本',
+    fontSize: 32,
+    fontWeight: '600',
+    color: '#303133',
+    textAlign: 'center',
+    background: 'transparent',
+    padding: 16,
   }
+  return [
+    `      <div class="lb-text" style="`,
+    `        display: flex;`,
+    `        align-items: center;`,
+    `        justify-content: ${schema.textAlign === 'left' ? 'flex-start' : schema.textAlign === 'right' ? 'flex-end' : 'center'};`,
+    `        width: 100%;`,
+    `        height: 100%;`,
+    `        padding: ${schema.padding}px;`,
+    `        background: ${schema.background};`,
+    `        color: ${schema.color};`,
+    `        font-size: ${schema.fontSize}px;`,
+    `        font-weight: ${schema.fontWeight};`,
+    `        text-align: ${schema.textAlign};`,
+    `        white-space: pre-wrap;`,
+    `        word-break: break-word;`,
+    `        line-height: 1.25;`,
+    `      ">${escapeHtml(schema.content)}</div>`,
+  ]
+}
 
-  const { xAxisField, yAxisField, chartType, title, color } = schema
-  const xField = jsString(xAxisField)
-  const yField = jsString(yAxisField)
-  const seriesName = yAxisField
-  const titleText = title || `${chartType === 'bar' ? '柱状图' : '折线图'} — ${seriesName}`
-
-  // 基础配置 — 与 ComponentWrapper 中的 baseOption 保持一致
-  const baseOptionLines: string[] = [
-    `  title: {`,
-    `    text: ${jsString(titleText)},`,
-    `    left: 'center',`,
-    `    top: 8,`,
-    `    textStyle: { fontSize: 16, fontWeight: 600, color: '#303133' },`,
-    `  },`,
-    color ? `  color: [${jsString(color)}],` : '',
-    `  tooltip: { trigger: 'axis' },`,
-    `  legend: { data: [${jsString(seriesName)}], bottom: 8 },`,
-    `  grid: { left: '5%', right: '5%', top: 48, bottom: 48, containLabel: true },`,
-    `  xAxis: {`,
-    `    type: 'category',`,
-    `    data: (Array.isArray(globalData?.[${xField}]) ? globalData[${xField}] : []).map(item => String(item ?? '')),`,
-    `    axisLabel: { rotate: globalData?.[${xField}]?.length > 8 ? 30 : 0, fontSize: 11 },`,
-    `  },`,
-    `  yAxis: { type: 'value', name: ${jsString(seriesName)} },`,
-    `  series: [{`,
-    `    name: ${jsString(seriesName)},`,
-    `    type: ${jsString(chartType)},`,
-    `    data: (Array.isArray(globalData?.[${yField}]) ? globalData[${yField}] : []).map(item => {`,
-    `      const val = Number(item)`,
-    `      return Number.isNaN(val) ? 0 : val`,
-    `    }),`,
-    `    emphasis: { focus: 'series' },`,
-    `    animationDelay: (idx) => idx * 50,`,
-    `  }],`,
+function buildTableTemplate(comp: ComponentInstance): string[] {
+  const varName = `table_${safeVarName(comp.id)}`
+  const schema = (comp.props.tableSchema as TableSchema | undefined) ?? { title: '', dataKey: '', columns: [], maxRows: 8, showHeader: true }
+  return [
+    `      <div class="lb-table">`,
+    schema.title ? `        <div class="lb-table__title">${escapeHtml(schema.title)}</div>` : '',
+    `        <div v-if="${varName}.rows.length === 0 || ${varName}.columns.length === 0" class="lb-table__empty">暂无表格数据</div>`,
+    `        <div v-else class="lb-table__body">`,
+    `          <table>`,
+    schema.showHeader ? `            <thead><tr><th v-for="column in ${varName}.columns" :key="column.key">{{ column.label }}</th></tr></thead>` : '',
+    `            <tbody>`,
+    `              <tr v-for="(row, rowIndex) in ${varName}.rows" :key="rowIndex">`,
+    `                <td v-for="column in ${varName}.columns" :key="column.key">{{ row[column.key] ?? '' }}</td>`,
+    `              </tr>`,
+    `            </tbody>`,
+    `          </table>`,
+    `        </div>`,
+    `      </div>`,
   ].filter(Boolean)
+}
 
-  // 如果有 customOption，尝试生成 merge 后的代码
-  const customStr = schema.customOption
-  if (customStr && customStr !== '{}') {
-    try {
-      const parsed = JSON.parse(customStr)
-      const customLines = JSON.stringify(parsed, null, 2)
-        .split('\n')
-        .map((line) => `  ${line}`)
-        .join('\n')
-      // 返回运行时 merge 调用（最精确）
-      return `  merge({}, {\n${baseOptionLines.join('\n')}\n  }, ${customLines.replace(/^\s{2}/, '')})`
-    } catch {
-      // customOption 解析失败，仅使用基础配置
-      return `{\n${baseOptionLines.join('\n')}\n}`
+function buildChartTemplate(comp: ComponentInstance): string[] {
+  return [
+    `      <v-chart`,
+    `        :option="chartOption_${safeVarName(comp.id)}"`,
+    `        style="width: 100%; height: 100%"`,
+    `        autoresize`,
+    `      />`,
+  ]
+}
+
+function buildTableDataCode(comp: ComponentInstance): string {
+  const schema = (comp.props.tableSchema as TableSchema | undefined) ?? { title: '', dataKey: '', columns: [], maxRows: 8, showHeader: true }
+  return `const table_${safeVarName(comp.id)} = (() => {
+  const rows = Array.isArray(globalData?.[${jsString(schema.dataKey)}])
+    ? globalData[${jsString(schema.dataKey)}].filter(row => row && typeof row === 'object' && !Array.isArray(row)).slice(0, ${schema.maxRows || 8})
+    : []
+  const configuredColumns = ${serializeJson(schema.columns)}
+  const columns = configuredColumns.filter(column => column.visible)
+  if (columns.length > 0 || rows.length === 0) return { rows, columns }
+  return {
+    rows,
+    columns: Object.keys(rows[0]).map(key => ({ key, label: key, visible: true })),
+  }
+})()`
+}
+
+function buildChartOptionHelper(): string {
+  return `function toNumber(value) {
+  const next = Number(value)
+  return Number.isFinite(next) ? next : 0
+}
+
+function readArray(data, field) {
+  if (!field || !data) return []
+  return Array.isArray(data[field]) ? data[field] : []
+}
+
+function readCustomArray(result, keys) {
+  for (const key of keys) {
+    if (Array.isArray(result[key])) return result[key]
+  }
+  return []
+}
+
+function runCustomDataCode(data, code) {
+  if (!code) return {}
+  try {
+    const fn = new Function('res', code)
+    const result = fn(data)
+    return result && typeof result === 'object' ? result : {}
+  } catch (err) {
+    console.error('Execute customDataCode failed:', err)
+    return {}
+  }
+}
+
+function mergeCustomOption(baseOption, customOption) {
+  if (!customOption || customOption === '{}') return baseOption
+  try {
+    return merge({}, baseOption, JSON.parse(customOption))
+  } catch (err) {
+    console.warn('customOption JSON parse failed:', err)
+    return baseOption
+  }
+}
+
+function buildChartOption(schema) {
+  const type = schema.chartType
+  const title = schema.title || type
+  const color = schema.color ? [schema.color] : undefined
+  const customResult = schema.useCustomDataCode ? runCustomDataCode(globalData, schema.customDataCode) : {}
+  let baseOption
+
+  if (type === 'pie' || type === 'funnel') {
+    const names = schema.useCustomDataCode ? readCustomArray(customResult, ['name', 'names', 'nameData', 'xAxis', 'xData']) : readArray(globalData, schema.nameField)
+    const values = schema.useCustomDataCode ? readCustomArray(customResult, ['value', 'values', 'valueData', 'yAxis', 'yData']) : readArray(globalData, schema.valueField)
+    baseOption = {
+      title: { text: title, left: 'center', top: 8, textStyle: { fontSize: 16, fontWeight: 600, color: '#303133' } },
+      color,
+      tooltip: { trigger: 'item' },
+      legend: { bottom: 8 },
+      series: [{
+        name: schema.valueField || title,
+        type,
+        radius: type === 'pie' ? ['35%', '65%'] : undefined,
+        left: type === 'funnel' ? '10%' : undefined,
+        top: type === 'funnel' ? 54 : undefined,
+        bottom: type === 'funnel' ? 24 : undefined,
+        data: names.map((name, index) => ({ name: String(name ?? ''), value: toNumber(values[index]) })),
+      }],
+    }
+  } else if (type === 'gauge') {
+    const values = schema.useCustomDataCode ? readCustomArray(customResult, ['value', 'values', 'valueData', 'yAxis', 'yData']) : readArray(globalData, schema.valueField)
+    baseOption = {
+      title: { text: title, left: 'center', top: 8, textStyle: { fontSize: 16, fontWeight: 600, color: '#303133' } },
+      color,
+      tooltip: { formatter: '{a}<br/>{b}: {c}' },
+      series: [{
+        name: title,
+        type: 'gauge',
+        radius: '78%',
+        center: ['50%', '58%'],
+        progress: { show: true },
+        detail: { valueAnimation: true, formatter: '{value}' },
+        data: [{ value: toNumber(values[0]), name: schema.valueField || '指标' }],
+      }],
+    }
+  } else if (type === 'radar') {
+    const indicators = readCustomArray(customResult, ['indicator', 'indicators'])
+    const values = readCustomArray(customResult, ['value', 'values', 'yAxis', 'yData'])
+    const max = Math.max(...values.map(toNumber), 100)
+    const names = indicators.length ? indicators : readCustomArray(customResult, ['xAxis', 'xData', 'name', 'names']).map(name => ({ name: String(name ?? '') }))
+    baseOption = {
+      title: { text: title, left: 'center', top: 8, textStyle: { fontSize: 16, fontWeight: 600, color: '#303133' } },
+      color,
+      tooltip: {},
+      radar: {
+        indicator: names.map(item => typeof item === 'object' ? { max, ...item, name: String(item.name ?? '') } : { name: String(item ?? ''), max }),
+        radius: '58%',
+      },
+      series: [{ name: title, type: 'radar', data: [{ value: values.map(toNumber), name: title }] }],
+    }
+  } else {
+    const xData = schema.useCustomDataCode ? readCustomArray(customResult, ['xAxis', 'xData']) : readArray(globalData, schema.xAxisField)
+    const yData = schema.useCustomDataCode ? readCustomArray(customResult, ['yAxis', 'yData']) : readArray(globalData, schema.yAxisField)
+    const isScatter = type === 'scatter'
+    const seriesName = schema.yAxisField || title
+    baseOption = {
+      title: { text: title, left: 'center', top: 8, textStyle: { fontSize: 16, fontWeight: 600, color: '#303133' } },
+      color,
+      tooltip: { trigger: isScatter ? 'item' : 'axis' },
+      legend: { data: [seriesName], bottom: 8 },
+      grid: { left: '5%', right: '5%', top: 48, bottom: 48, containLabel: true },
+      xAxis: {
+        type: isScatter ? 'value' : 'category',
+        data: isScatter ? undefined : xData.map(item => String(item ?? '')),
+        axisLabel: { rotate: !isScatter && xData.length > 8 ? 30 : 0, fontSize: 11 },
+      },
+      yAxis: { type: 'value', name: seriesName },
+      series: [{
+        name: seriesName,
+        type,
+        data: isScatter ? xData.map((item, index) => [toNumber(item), toNumber(yData[index])]) : yData.map(toNumber),
+        emphasis: { focus: 'series' },
+        animationDelay: idx => idx * 50,
+      }],
     }
   }
 
-  return `{\n${baseOptionLines.join('\n')}\n}`
+  return mergeCustomOption(baseOption, schema.customOption)
+}`
 }
 
-/**
- * 生成完整的 .vue 单文件组件代码
- *
- * @param schema - 大屏 Schema（包含 globalData、components）
- */
 export function generateVueCode(schema: DashboardSchema): string {
-  const { title, canvas, components, globalData } = schema
-
-  // 按 zIndex 排序，确保渲染顺序正确
+  const { canvas, components, globalData } = schema
   const sorted = [...components].sort((a, b) => a.zIndex - b.zIndex)
+  const chartComponents = sorted.filter(isChartComponent)
+  const tableComponents = sorted.filter((comp) => comp.type === 'table')
 
-  // 判断是否需要 lodash merge
-  const hasCustomOption = sorted.some((c) => {
-    const cs = c.props.chartSchema as ChartSchema | undefined
-    const co = cs?.customOption
-    return co && co !== '{}'
-  })
-
-  // ==================== 构建 template ====================
   const templateLines: string[] = [
     `<template>`,
-    `  <div class="dashboard-root" style="`,
-    `    width: ${canvas.width}px;`,
-    `    height: ${canvas.height}px;`,
-    `    background: ${canvas.background};`,
-    `    position: relative;`,
-    `    overflow: hidden;`,
-    `  ">`,
+    `  <div class="dashboard-root" style="width: ${canvas.width}px; height: ${canvas.height}px; background: ${canvas.background}; position: relative; overflow: hidden;">`,
   ]
 
   sorted.forEach((comp) => {
-    const { id, position } = comp
-    templateLines.push(`    <!-- ${id} -->`)
-    templateLines.push(`    <div`)
-    templateLines.push(`      style="`)
-    templateLines.push(`        position: absolute;`)
-    templateLines.push(`        left: ${position.x}px;`)
-    templateLines.push(`        top: ${position.y}px;`)
-    templateLines.push(`        width: ${position.w}px;`)
-    templateLines.push(`        height: ${position.h}px;`)
-    templateLines.push(`        background: #fff;`)
-    templateLines.push(`        border-radius: 8px;`)
-    templateLines.push(`        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);`)
-    templateLines.push(`        overflow: hidden;`)
-    templateLines.push(`      "`)
-    templateLines.push(`    >`)
-    templateLines.push(`      <v-chart`)
-    templateLines.push(`        :option="chartOption_${id.replace(/-/g, '_')}"`)
-    templateLines.push(`        style="width: 100%; height: 100%"`)
-    templateLines.push(`        autoresize`)
-    templateLines.push(`      />`)
+    templateLines.push(`    <!-- ${comp.id} -->`)
+    templateLines.push(`    <div style="${buildWrapperStyle(comp)}">`)
+    if (isChartComponent(comp)) {
+      templateLines.push(...buildChartTemplate(comp))
+    } else if (comp.type === 'text') {
+      templateLines.push(...buildTextTemplate(comp))
+    } else if (comp.type === 'table') {
+      templateLines.push(...buildTableTemplate(comp))
+    } else {
+      templateLines.push(`      <div class="lb-empty">${escapeHtml(comp.type)}</div>`)
+    }
     templateLines.push(`    </div>`)
   })
 
@@ -158,75 +279,62 @@ export function generateVueCode(schema: DashboardSchema): string {
   templateLines.push(`</template>`)
   templateLines.push(``)
 
-  // ==================== 构建 script ====================
   const scriptLines: string[] = [
     `<script setup>`,
-    `import VChart from 'vue-echarts'`,
-    `import { use } from 'echarts/core'`,
-    `import { CanvasRenderer } from 'echarts/renderers'`,
-    `import { BarChart, LineChart } from 'echarts/charts'`,
-    `import {`,
-    `  TitleComponent,`,
-    `  TooltipComponent,`,
-    `  LegendComponent,`,
-    `  GridComponent,`,
-    `} from 'echarts/components'`,
+    chartComponents.length > 0 ? `import VChart from 'vue-echarts'` : '',
+    chartComponents.length > 0 ? `import { use } from 'echarts/core'` : '',
+    chartComponents.length > 0 ? `import { CanvasRenderer } from 'echarts/renderers'` : '',
+    chartComponents.length > 0 ? `import { BarChart, LineChart, PieChart, ScatterChart, RadarChart, GaugeChart, FunnelChart } from 'echarts/charts'` : '',
+    chartComponents.length > 0 ? `import { TitleComponent, TooltipComponent, LegendComponent, GridComponent } from 'echarts/components'` : '',
+    chartComponents.length > 0 ? `import { merge } from 'lodash-es'` : '',
     ``,
-    `// 注册 ECharts 必需组件`,
-    `use([`,
-    `  CanvasRenderer,`,
-    `  BarChart,`,
-    `  LineChart,`,
-    `  TitleComponent,`,
-    `  TooltipComponent,`,
-    `  LegendComponent,`,
-    `  GridComponent,`,
-    `])`,
-    ``,
-  ]
+  ].filter(Boolean)
 
-  if (hasCustomOption) {
-    scriptLines.push(`import { merge as _merge } from 'lodash-es'`)
-    scriptLines.push(`const merge = _merge`)
+  if (chartComponents.length > 0) {
+    scriptLines.push(`use([CanvasRenderer, BarChart, LineChart, PieChart, ScatterChart, RadarChart, GaugeChart, FunnelChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent])`)
     scriptLines.push(``)
   }
 
-  // 全局数据常量
-  scriptLines.push(`// 全局数据（由探针抓取并清洗入库）`)
-  scriptLines.push(`const globalData = ${serializeGlobalData(globalData)}`)
+  scriptLines.push(`const globalData = ${serializeJson(globalData)}`)
   scriptLines.push(``)
 
-  // 每个组件的 Option
-  sorted.forEach((comp) => {
-    const varName = `chartOption_${comp.id.replace(/-/g, '_')}`
-    scriptLines.push(`const ${varName} = ${buildChartOptionCode(comp)}`)
+  if (chartComponents.length > 0) {
+    scriptLines.push(buildChartOptionHelper())
+    scriptLines.push(``)
+  }
+
+  chartComponents.forEach((comp) => {
+    const chartSchema = comp.props.chartSchema as ChartSchema | undefined
+    scriptLines.push(`const chartOption_${safeVarName(comp.id)} = buildChartOption(${serializeJson(chartSchema ?? {})})`)
+    scriptLines.push(``)
+  })
+
+  tableComponents.forEach((comp) => {
+    scriptLines.push(buildTableDataCode(comp))
     scriptLines.push(``)
   })
 
   scriptLines.push(`</script>`)
   scriptLines.push(``)
 
-  // ==================== 构建 style ====================
-  const styleLines: string[] = [
+  const styleLines = [
     `<style scoped>`,
-    `.dashboard-root {`,
-    `  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;`,
-    `}`,
+    `.dashboard-root { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }`,
+    `.lb-text { box-sizing: border-box; }`,
+    `.lb-table { width: 100%; height: 100%; display: flex; flex-direction: column; color: #303133; }`,
+    `.lb-table__title { padding: 12px 14px 8px; font-size: 15px; font-weight: 700; }`,
+    `.lb-table__body { flex: 1; min-height: 0; overflow: auto; padding: 0 12px 12px; }`,
+    `.lb-table table { width: 100%; border-collapse: collapse; font-size: 12px; }`,
+    `.lb-table th { position: sticky; top: 0; padding: 8px 10px; text-align: left; background: #f5f7fa; border-bottom: 1px solid #ebeef5; color: #606266; white-space: nowrap; }`,
+    `.lb-table td { padding: 8px 10px; border-bottom: 1px solid #f0f2f5; white-space: nowrap; }`,
+    `.lb-table__empty, .lb-empty { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #909399; font-size: 13px; }`,
     `</style>`,
     ``,
   ]
 
-  // ==================== 拼接 ====================
-  return [
-    ...templateLines,
-    ...scriptLines,
-    ...styleLines,
-  ].join('\n')
+  return [...templateLines, ...scriptLines, ...styleLines].join('\n')
 }
 
-/**
- * 触发浏览器下载 .vue 文件
- */
 export function downloadVueFile(content: string, filename: string): void {
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
   const url = URL.createObjectURL(blob)

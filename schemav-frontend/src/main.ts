@@ -12,10 +12,16 @@ import {
 } from 'echarts/renderers'
 import {
   BarChart,
-  LineChart
+  FunnelChart,
+  GaugeChart,
+  LineChart,
+  PieChart,
+  RadarChart,
+  ScatterChart
 } from 'echarts/charts'
 import {
   GridComponent,
+  TitleComponent,
   TooltipComponent,
   LegendComponent
 } from 'echarts/components'
@@ -23,7 +29,13 @@ import {
 use([
   CanvasRenderer,
   BarChart,
+  FunnelChart,
+  GaugeChart,
   LineChart,
+  PieChart,
+  RadarChart,
+  ScatterChart,
+  TitleComponent,
   GridComponent,
   TooltipComponent,
   LegendComponent

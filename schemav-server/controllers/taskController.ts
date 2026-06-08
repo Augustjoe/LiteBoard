@@ -16,9 +16,11 @@ export interface ComponentPosition {
 }
 
 export interface ChartSchema {
-  chartType: 'bar' | 'line';
+  chartType: 'bar' | 'line' | 'pie' | 'scatter' | 'radar' | 'gauge' | 'funnel';
   xAxisField: string;
   yAxisField: string;
+  nameField?: string;
+  valueField?: string;
   customOption?: string;
   title?: string;
   color?: string;

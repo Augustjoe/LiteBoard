@@ -1,10 +1,10 @@
 import { defineComponent, ref, computed, onMounted, onUnmounted, watch, type PropType } from 'vue'
-import { merge } from 'lodash-es'
-import { useEditorStore, type ComponentInstance, type ChartSchema } from '../stores/editorStore'
+import { useEditorStore, type ComponentInstance, type ChartSchema, type TableSchema, type TextSchema } from '../stores/editorStore'
+import { buildChartOption, getChartBlockReason } from '../utils/chartOptions'
 import VChart from 'vue-echarts'
 
 /**
- * ComponentWrapper — 高阶包装组件（全局数据湖升级）
+ * ComponentWrapper — 高阶包装组件（当前数据集升级）
  *
  * 职责：
  * 1. 为每个 ComponentInstance 生成绝对定位的容器
@@ -12,10 +12,9 @@ import VChart from 'vue-echarts'
  * 3. 选中态：蓝色边框 + 8 个缩放手柄
  * 4. Z-Index 管理 + 事件冒泡阻止
  *
- * 全局数据湖升级：
+ * 当前数据集升级：
  * - chartOption 直接从 store.globalData 读取数据
- * - xAxisField / yAxisField 对应 globalData 的顶层 key
- * - 值必须为数组或可转为数组
+ * - 字段数组可直接绑定，数组对象可通过图表级 JS 转换
  */
 
 // 缩放手柄的类型定义
@@ -28,19 +27,6 @@ const GRID_SIZE = 20
 /** 将数值吸附到最近的网格点 */
 const snapToGrid = (value: number): number =>
   Math.round(value / GRID_SIZE) * GRID_SIZE
-
-function hasComplexItems(values: any[]): boolean {
-  return values.some((value) =>
-    value !== null &&
-    value !== undefined &&
-    (typeof value === 'object' || typeof value === 'function')
-  )
-}
-
-function isNumericArray(values: any[]): boolean {
-  const present = values.filter((value) => value !== null && value !== undefined && value !== '')
-  return present.length > 0 && present.every((value) => Number.isFinite(Number(value)))
-}
 
 export default defineComponent({
   name: 'ComponentWrapper',
@@ -89,163 +75,54 @@ export default defineComponent({
 
     // ===================== ECharts Option（全局数据湖：从 globalData 读取数据） =====================
 
-    /** 图表未就绪的原因枚举（null = 已就绪） */
     const chartBlockReason = computed<string | null>(() => {
       const schema = props.component.props.chartSchema as ChartSchema | undefined
-
-      if (!schema) {
-        return 'no_binding'
-      }
-
-      if (!store.globalData) {
-        return 'no_global_data'
-      }
-
-      if (schema.useCustomDataCode) {
-        if (!schema.customDataCode) {
-          return 'no_custom_code'
-        }
-        return null
-      }
-
-      if (!schema.xAxisField || !schema.yAxisField) {
-        return 'no_binding'
-      }
-
-      const xVal = store.globalData[schema.xAxisField]
-      const yVal = store.globalData[schema.yAxisField]
-
-      if (xVal === undefined || yVal === undefined) {
-        return 'field_not_found'
-      }
-
-      if (!Array.isArray(xVal) || !Array.isArray(yVal)) {
-        return 'invalid_field_shape'
-      }
-
-      if (xVal.length === 0 || yVal.length === 0) {
-        return 'empty'
-      }
-
-      if (xVal.length !== yVal.length) {
-        return 'length_mismatch'
-      }
-
-      if (hasComplexItems(xVal)) {
-        return 'complex_x'
-      }
-
-      if (!isNumericArray(yVal)) {
-        return 'non_numeric_y'
-      }
-
-      return null
+      return getChartBlockReason(schema, store.globalData)
     })
 
     const chartOption = computed(() => {
-      if (chartBlockReason.value !== null) {
-        return null
-      }
-
       const schema = props.component.props.chartSchema as ChartSchema | undefined
-      if (!schema) return null
+      if (!schema || !store.globalData || chartBlockReason.value !== null) return null
+      return buildChartOption(schema, store.globalData)
+    })
 
-      const gd = store.globalData!
-      const { xAxisField, yAxisField, chartType, useCustomDataCode, customDataCode, color, title } = schema
-
-      let xRaw: any = []
-      let yRaw: any = []
-
-      if (useCustomDataCode && customDataCode) {
-        try {
-          const fn = new Function('res', customDataCode)
-          const customResult = fn(gd)
-          if (customResult && typeof customResult === 'object') {
-            xRaw = customResult.xAxis || customResult.xData || []
-            yRaw = customResult.yAxis || customResult.yData || []
-          }
-        } catch (err) {
-          console.error('[ComponentWrapper] Execute customDataCode failed:', err)
-        }
-      } else {
-        xRaw = gd[xAxisField]
-        yRaw = gd[yAxisField]
+    const textSchema = computed<TextSchema>(() => {
+      return (props.component.props.textSchema as TextSchema | undefined) ?? {
+        content: '双击右侧配置文本',
+        fontSize: 32,
+        fontWeight: '600',
+        color: '#303133',
+        textAlign: 'center',
+        background: 'transparent',
+        padding: 16,
       }
+    })
 
-      const xData: any[] = Array.isArray(xRaw) ? xRaw : []
-      const yData: any[] = Array.isArray(yRaw) ? yRaw : []
-
-      const seriesName = yAxisField || title || '数据'
-
-      // 基础图表配置
-      const baseOption = {
-        title: {
-          text: title || `${chartType === 'bar' ? '柱状图' : '折线图'} — ${seriesName}`,
-          left: 'center',
-          top: 8,
-          textStyle: {
-            fontSize: 16,
-            fontWeight: 600,
-            color: '#303133',
-          },
-        },
-        color: color ? [color] : undefined,
-        tooltip: {
-          trigger: 'axis' as const,
-        },
-        legend: {
-          data: [seriesName],
-          bottom: 8,
-        },
-        grid: {
-          left: '5%',
-          right: '5%',
-          top: 48,
-          bottom: 48,
-          containLabel: true,
-        },
-        xAxis: {
-          type: 'category' as const,
-          data: xData.map((item) => String(item ?? '')),
-          axisLabel: {
-            rotate: xData.length > 8 ? 30 : 0,
-            fontSize: 11,
-          },
-        },
-        yAxis: {
-          type: 'value' as const,
-          name: seriesName,
-        },
-        series: [
-          {
-            name: seriesName,
-            type: chartType,
-            data: yData.map((item) => {
-              const val = Number(item)
-              return Number.isNaN(val) ? 0 : val
-            }),
-            emphasis: {
-              focus: 'series' as const,
-            },
-            animationDelay: (idx: number) => idx * 50,
-          },
-        ],
+    const tableSchema = computed<TableSchema>(() => {
+      return (props.component.props.tableSchema as TableSchema | undefined) ?? {
+        title: '数据表格',
+        dataKey: '',
+        columns: [],
+        maxRows: 8,
+        showHeader: true,
       }
+    })
 
-      // 尝试解析用户自定义 JSON 配置，安全深度合并
-      const customStr = schema.customOption
-      if (!customStr || customStr === '{}') {
-        return baseOption
-      }
+    const tableRows = computed<Record<string, any>[]>(() => {
+      const dataKey = tableSchema.value.dataKey
+      if (!store.globalData || !dataKey) return []
+      const rows = store.globalData[dataKey]
+      if (!Array.isArray(rows)) return []
+      return rows
+        .filter((row) => row && typeof row === 'object' && !Array.isArray(row))
+        .slice(0, Math.max(1, tableSchema.value.maxRows))
+    })
 
-      try {
-        const parsed = JSON.parse(customStr)
-        // merge 深度合并：customOption 覆盖 baseOption 同名字段
-        return merge({}, baseOption, parsed)
-      } catch (err) {
-        console.warn('[ChartRenderer] customOption JSON 解析失败，已回退到基础配置：', err)
-        return baseOption
-      }
+    const tableColumns = computed(() => {
+      const explicit = tableSchema.value.columns.filter((column) => column.visible)
+      if (explicit.length > 0) return explicit
+      if (tableRows.value.length === 0) return []
+      return Object.keys(tableRows.value[0]).map((key) => ({ key, label: key, visible: true }))
     })
 
     // ===================== 键盘删除 =====================
@@ -501,17 +378,17 @@ export default defineComponent({
                   <span>📊 图表组件</span>
                   <span style={{ fontSize: '12px', textAlign: 'center', padding: '0 16px' }}>
                     {chartBlockReason.value === 'no_global_data'
-                      ? '请先在左侧初始化全局数据'
+                      ? '请先在左侧创建当前数据集'
                       : chartBlockReason.value === 'field_not_found'
                         ? '全局数据中未找到对应字段'
                         : chartBlockReason.value === 'invalid_field_shape'
-                          ? '字段值必须是数组，请检查公共数据池'
+                          ? '字段值必须是数组，请检查当前数据集'
                           : chartBlockReason.value === 'length_mismatch'
                             ? 'X/Y 字段数组长度不一致'
                             : chartBlockReason.value === 'complex_x'
                               ? 'X 轴字段不能包含对象值'
-                              : chartBlockReason.value === 'non_numeric_y'
-                                ? 'Y 轴字段必须是数值数组'
+                              : chartBlockReason.value === 'non_numeric_y' || chartBlockReason.value === 'non_numeric_value'
+                                ? '数值字段必须是数值数组'
                         : chartBlockReason.value === 'no_binding'
                           ? '请在右侧配置面板绑定 X/Y 轴字段'
                           : chartBlockReason.value === 'no_custom_code'
@@ -520,6 +397,102 @@ export default defineComponent({
                   </span>
                 </div>
               )
+            ) : type === 'text' ? (
+              <div
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: textSchema.value.textAlign === 'left'
+                    ? 'flex-start'
+                    : textSchema.value.textAlign === 'right'
+                      ? 'flex-end'
+                      : 'center',
+                  padding: `${textSchema.value.padding}px`,
+                  background: textSchema.value.background || 'transparent',
+                  color: textSchema.value.color,
+                  fontSize: `${textSchema.value.fontSize}px`,
+                  fontWeight: textSchema.value.fontWeight,
+                  textAlign: textSchema.value.textAlign,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  lineHeight: 1.25,
+                }}
+              >
+                {textSchema.value.content}
+              </div>
+            ) : type === 'table' ? (
+              <div
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  background: '#fff',
+                  color: '#303133',
+                }}
+              >
+                {tableSchema.value.title && (
+                  <div style={{ padding: '12px 14px 8px', fontSize: '15px', fontWeight: 700 }}>
+                    {tableSchema.value.title}
+                  </div>
+                )}
+                {tableRows.value.length === 0 || tableColumns.value.length === 0 ? (
+                  <div style={{
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#909399',
+                    fontSize: '13px',
+                  }}>
+                    请选择数组对象数据集
+                  </div>
+                ) : (
+                  <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '0 12px 12px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                      {tableSchema.value.showHeader && (
+                        <thead>
+                          <tr>
+                            {tableColumns.value.map((column) => (
+                              <th key={column.key} style={{
+                                position: 'sticky',
+                                top: 0,
+                                padding: '8px 10px',
+                                textAlign: 'left',
+                                background: '#f5f7fa',
+                                borderBottom: '1px solid #ebeef5',
+                                color: '#606266',
+                                fontWeight: 700,
+                                whiteSpace: 'nowrap',
+                              }}>
+                                {column.label}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                      )}
+                      <tbody>
+                        {tableRows.value.map((row, rowIndex) => (
+                          <tr key={rowIndex}>
+                            {tableColumns.value.map((column) => (
+                              <td key={column.key} style={{
+                                padding: '8px 10px',
+                                borderBottom: '1px solid #f0f2f5',
+                                whiteSpace: 'nowrap',
+                                color: '#303133',
+                              }}>
+                                {String(row[column.key] ?? '')}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
             ) : (
               <div
                 style={{

@@ -6,10 +6,16 @@ import { ref, computed } from 'vue'
 // ============================================================
 
 /** 图表配置 Schema（嵌入在 ComponentInstance.props 中） */
+export type ChartType = 'bar' | 'line' | 'pie' | 'scatter' | 'radar' | 'gauge' | 'funnel'
+
 export interface ChartSchema {
-  chartType: 'bar' | 'line'
+  chartType: ChartType
   xAxisField: string
   yAxisField: string
+  /** 饼图/漏斗图等使用的名称字段 */
+  nameField?: string
+  /** 饼图/漏斗图/仪表盘等使用的数值字段 */
+  valueField?: string
   /** ECharts 深度自定义 JSON 配置 */
   customOption?: string
   /** 新增：图表标题 */
@@ -20,6 +26,30 @@ export interface ChartSchema {
   useCustomDataCode?: boolean
   /** 新增：手写 JS 过滤数据代码 */
   customDataCode?: string
+}
+
+export interface TextSchema {
+  content: string
+  fontSize: number
+  fontWeight: string
+  color: string
+  textAlign: 'left' | 'center' | 'right'
+  background: string
+  padding: number
+}
+
+export interface TableColumnSchema {
+  key: string
+  label: string
+  visible: boolean
+}
+
+export interface TableSchema {
+  title: string
+  dataKey: string
+  columns: TableColumnSchema[]
+  maxRows: number
+  showHeader: boolean
 }
 
 /** 组件位置与尺寸 */
@@ -39,7 +69,7 @@ export interface ComponentInstance {
   props: Record<string, unknown>
 }
 
-/** 大屏 Schema — 完整的项目配置 */
+/** 仪表盘 Schema — 完整的项目配置 */
 export interface DashboardSchema {
   version: string
   title: string
@@ -54,7 +84,7 @@ export interface DashboardSchema {
   updatedAt: string
 }
 
-/** 当前大屏的公共数据池：字段名 -> 字段值数组 */
+/** 当前仪表盘数据集：顶层条目名 -> 数组（字段数组或数组对象数据集） */
 export type DataPool = Record<string, any[]>
 
 /** 后端返回的 Task 完整结构 */
@@ -66,6 +96,15 @@ export interface Task {
   createdAt: string
   updatedAt: string
   schema: DashboardSchema
+}
+
+export type SaveStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
+export type DataPoolEntryKind = 'field-array' | 'table-array' | 'mixed' | 'empty'
+
+export interface DataPoolEntrySummary {
+  name: string
+  kind: DataPoolEntryKind
+  length: number
 }
 
 // ============================================================
@@ -104,6 +143,24 @@ function isNumericArray(values: any[]): boolean {
   return present.length > 0 && present.every((value) => Number.isFinite(Number(value)))
 }
 
+function classifyDataPoolEntry(values: any[]): DataPoolEntryKind {
+  if (values.length === 0) return 'empty'
+  const present = values.filter((value) => value !== null && value !== undefined)
+  if (present.length === 0) return 'empty'
+
+  const objectCount = present.filter((value) => (
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+  )).length
+
+  if (objectCount === present.length) return 'table-array'
+  if (objectCount > 0) return 'mixed'
+  return 'field-array'
+}
+
+function cloneComponent(component: ComponentInstance): ComponentInstance {
+  return JSON.parse(JSON.stringify(component)) as ComponentInstance
+}
+
 // ============================================================
 // Store 定义
 // ============================================================
@@ -114,14 +171,17 @@ export const useEditorStore = defineStore('editor', () => {
   /** 当前编辑的任务 ID */
   const currentTaskId = ref<string | null>(null)
 
-  /** 大屏标题 */
-  const title = ref('未命名大屏')
+  /** 仪表盘标题 */
+  const title = ref('未命名仪表盘')
 
-  /** 🔥 全局单一数据湖 — 当前大屏的唯一数据基座 */
+  /** 当前仪表盘的唯一数据基座 */
   const globalData = ref<DataPool | null>(null)
 
   /** 画布上的所有组件实例 */
   const components = ref<ComponentInstance[]>([])
+
+  /** 当前编辑内容的保存状态 */
+  const saveStatus = ref<SaveStatus>('idle')
 
   /** 当前选中的组件 ID（null 表示未选中） */
   const selectedComponentId = ref<string | null>(null)
@@ -158,6 +218,15 @@ export const useEditorStore = defineStore('editor', () => {
     return availableFields.value.filter((field) => !numeric.has(field))
   })
 
+  const dataPoolEntries = computed<DataPoolEntrySummary[]>(() => {
+    if (!globalData.value) return []
+    return Object.entries(globalData.value).map(([name, values]) => ({
+      name,
+      kind: classifyDataPoolEntry(Array.isArray(values) ? values : []),
+      length: Array.isArray(values) ? values.length : 0,
+    }))
+  })
+
   const selectedComponent = computed<ComponentInstance | null>(() => {
     if (!selectedComponentId.value) return null
     return components.value.find((c) => c.id === selectedComponentId.value) ?? null
@@ -180,7 +249,7 @@ export const useEditorStore = defineStore('editor', () => {
     )
   })
 
-  /** 构建当前大屏 Schema 对象 */
+  /** 构建当前仪表盘 Schema 对象 */
   const currentSchema = computed<DashboardSchema>(() => {
     const now = new Date().toISOString()
     return {
@@ -200,19 +269,27 @@ export const useEditorStore = defineStore('editor', () => {
 
   // ===================== Actions =====================
 
-  /** 🔥 增量合并全局数据 — 使用 lodash-es merge 深度合并 */
+  function markDirty(): void {
+    if (saveStatus.value !== 'saving') {
+      saveStatus.value = 'dirty'
+    }
+  }
+
+  /** 增量合并当前数据集 — 同名顶层条目整列替换 */
   function mergeGlobalData(data: DataPool): void {
     if (globalData.value === null) {
       globalData.value = data
     } else {
       globalData.value = { ...globalData.value, ...data }
     }
+    markDirty()
     console.log('[editorStore] 全局数据已合并，顶层 keys:', Object.keys(globalData.value!).join(', '))
   }
 
   /** 🔥 全量替换全局数据 — 完全覆盖现有数据 */
   function replaceGlobalData(data: DataPool): void {
     globalData.value = data
+    markDirty()
     console.log('[editorStore] 全局数据已替换，顶层 keys:', Object.keys(data).join(', '))
   }
 
@@ -236,6 +313,42 @@ export const useEditorStore = defineStore('editor', () => {
     return { xAxisField, yAxisField }
   }
 
+  function getDefaultValueField(): string {
+    return numericFields.value[0] ?? availableFields.value[0] ?? ''
+  }
+
+  function getDefaultNameField(): string {
+    return dimensionFields.value[0] ?? availableFields.value[0] ?? ''
+  }
+
+  function getTableDataKeys(): string[] {
+    if (!globalData.value) return []
+    return Object.entries(globalData.value)
+      .filter(([, values]) => {
+        if (!Array.isArray(values) || values.length === 0) return false
+        return values.some((item) => item && typeof item === 'object' && !Array.isArray(item))
+      })
+      .map(([key]) => key)
+  }
+
+  function inferTableColumns(dataKey: string): TableColumnSchema[] {
+    if (!globalData.value || !dataKey) return []
+    const rows = globalData.value[dataKey]
+    if (!Array.isArray(rows)) return []
+
+    const keys = new Set<string>()
+    rows.forEach((row) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return
+      Object.keys(row).forEach((key) => keys.add(key))
+    })
+
+    return Array.from(keys).map((key) => ({
+      key,
+      label: key,
+      visible: true,
+    }))
+  }
+
   function addComponent(type: string, defaultProps?: Record<string, unknown>) {
     const maxZ = components.value.reduce((max, c) => Math.max(max, c.zIndex), 0)
     const offset = (components.value.length % 5) * 30
@@ -255,24 +368,19 @@ export const useEditorStore = defineStore('editor', () => {
 
     components.value.push(newComp)
     selectedComponentId.value = newComp.id
+    markDirty()
   }
 
   function updateComponentPosition(id: string, newPos: Partial<ComponentPosition>) {
     const comp = components.value.find((c) => c.id === id)
     if (comp) {
       comp.position = { ...comp.position, ...newPos }
+      markDirty()
     }
   }
 
   function selectComponent(id: string | null) {
     selectedComponentId.value = id
-    if (id) {
-      const comp = components.value.find((c) => c.id === id)
-      if (comp) {
-        const maxZ = components.value.reduce((max, c) => Math.max(max, c.zIndex), 0)
-        comp.zIndex = maxZ + 1
-      }
-    }
   }
 
   function updateChartSchema(partial: Partial<ChartSchema>) {
@@ -284,6 +392,41 @@ export const useEditorStore = defineStore('editor', () => {
       yAxisField: '',
     }
     comp.props.chartSchema = { ...current, ...partial }
+    markDirty()
+  }
+
+  function updateTextSchema(partial: Partial<TextSchema>) {
+    const comp = selectedComponent.value
+    if (!comp) return
+    const current = (comp.props.textSchema as TextSchema | undefined) ?? {
+      content: '文本',
+      fontSize: 32,
+      fontWeight: '600',
+      color: '#303133',
+      textAlign: 'center',
+      background: 'transparent',
+      padding: 16,
+    }
+    comp.props.textSchema = { ...current, ...partial }
+    markDirty()
+  }
+
+  function updateTableSchema(partial: Partial<TableSchema>) {
+    const comp = selectedComponent.value
+    if (!comp) return
+    const current = (comp.props.tableSchema as TableSchema | undefined) ?? {
+      title: '数据表格',
+      dataKey: getTableDataKeys()[0] ?? '',
+      columns: [],
+      maxRows: 8,
+      showHeader: true,
+    }
+    const next = { ...current, ...partial }
+    if (partial.dataKey && partial.dataKey !== current.dataKey) {
+      next.columns = inferTableColumns(partial.dataKey)
+    }
+    comp.props.tableSchema = next
+    markDirty()
   }
 
   function updateCustomOption(jsonStr: string) {
@@ -295,6 +438,7 @@ export const useEditorStore = defineStore('editor', () => {
       yAxisField: '',
     }
     comp.props.chartSchema = { ...current, customOption: jsonStr }
+    markDirty()
   }
 
   function removeComponent(id: string) {
@@ -302,12 +446,49 @@ export const useEditorStore = defineStore('editor', () => {
     if (idx === -1) return
     components.value.splice(idx, 1)
     selectComponent(null)
+    markDirty()
+  }
+
+  function duplicateSelectedComponent(): void {
+    const comp = selectedComponent.value
+    if (!comp) return
+
+    const maxZ = components.value.reduce((max, c) => Math.max(max, c.zIndex), 0)
+    const clone = cloneComponent(comp)
+    clone.id = generateId()
+    clone.position = {
+      ...clone.position,
+      x: clone.position.x + 40,
+      y: clone.position.y + 40,
+    }
+    clone.zIndex = maxZ + 1
+
+    components.value.push(clone)
+    selectedComponentId.value = clone.id
+    markDirty()
+  }
+
+  function bringSelectedToFront(): void {
+    const comp = selectedComponent.value
+    if (!comp) return
+    const maxZ = components.value.reduce((max, c) => Math.max(max, c.zIndex), 0)
+    comp.zIndex = maxZ + 1
+    markDirty()
+  }
+
+  function sendSelectedToBack(): void {
+    const comp = selectedComponent.value
+    if (!comp) return
+    const minZ = components.value.reduce((min, c) => Math.min(min, c.zIndex), comp.zIndex)
+    comp.zIndex = minZ - 1
+    markDirty()
   }
 
   function clearData() {
     globalData.value = null
     components.value = []
     selectedComponentId.value = null
+    markDirty()
   }
 
   function autoSelectFields() {
@@ -323,21 +504,24 @@ export const useEditorStore = defineStore('editor', () => {
         xAxisField: defaults.xAxisField,
         yAxisField: defaults.yAxisField,
       }
+      markDirty()
       return
     }
 
     if (!schema.xAxisField || !availableFields.value.includes(schema.xAxisField)) {
       schema.xAxisField = defaults.xAxisField
+      markDirty()
     }
     if (!schema.yAxisField || !availableFields.value.includes(schema.yAxisField)) {
       schema.yAxisField = defaults.yAxisField
+      markDirty()
     }
   }
 
   // ===================== 从 Schema 对象填充 State =====================
 
   function applySchema(schema: DashboardSchema): void {
-    title.value = schema.title || '未命名大屏'
+    title.value = schema.title || '未命名仪表盘'
     components.value = schema.components ?? []
     globalData.value = normalizeDataPool(schema.globalData) ?? null
     selectedComponentId.value = null
@@ -350,6 +534,7 @@ export const useEditorStore = defineStore('editor', () => {
     }
 
     restoreNextId(schema.components ?? [])
+    saveStatus.value = 'saved'
 
     console.log(
       `[editorStore] Schema 已应用，共 ${schema.components?.length ?? 0} 个组件，globalData: ${globalData.value ? '已挂载' : '空'}`
@@ -400,6 +585,7 @@ export const useEditorStore = defineStore('editor', () => {
     }
 
     try {
+      saveStatus.value = 'saving'
       const schema = currentSchema.value
       schema.updatedAt = new Date().toISOString()
 
@@ -411,13 +597,16 @@ export const useEditorStore = defineStore('editor', () => {
 
       if (!res.ok) {
         console.error(`[editorStore] 保存任务失败 HTTP ${res.status}`)
+        saveStatus.value = 'error'
         return false
       }
 
+      saveStatus.value = 'saved'
       console.log('[editorStore] 任务已保存到后端')
       return true
     } catch (err) {
       console.error('[editorStore] 保存任务异常:', err)
+      saveStatus.value = 'error'
       return false
     }
   }
@@ -446,16 +635,18 @@ export const useEditorStore = defineStore('editor', () => {
   function clearCanvas(): void {
     components.value = []
     selectedComponentId.value = null
+    markDirty()
     console.log('[editorStore] 画布已清空')
   }
 
   function resetAll(): void {
-    title.value = '未命名大屏'
+    title.value = '未命名仪表盘'
     globalData.value = null
     components.value = []
     selectedComponentId.value = null
     isFullscreenPreview.value = false
     currentTaskId.value = null
+    saveStatus.value = 'idle'
     _nextId = 1
     console.log('[editorStore] 编辑器已完全重置')
   }
@@ -466,10 +657,12 @@ export const useEditorStore = defineStore('editor', () => {
 
   function updateCanvasConfig(partial: Partial<typeof canvasConfig.value>): void {
     canvasConfig.value = { ...canvasConfig.value, ...partial }
+    markDirty()
   }
 
   function setTitle(newTitle: string): void {
     title.value = newTitle
+    markDirty()
   }
 
   // ===================== 导出 =====================
@@ -480,6 +673,7 @@ export const useEditorStore = defineStore('editor', () => {
     title,
     globalData,
     components,
+    saveStatus,
     selectedComponentId,
     isFullscreenPreview,
     canvasConfig,
@@ -487,6 +681,7 @@ export const useEditorStore = defineStore('editor', () => {
     availableFields,
     numericFields,
     dimensionFields,
+    dataPoolEntries,
     hasData,
     chartSchema,
     isChartReady,
@@ -495,15 +690,25 @@ export const useEditorStore = defineStore('editor', () => {
     // actions
     mergeGlobalData,
     replaceGlobalData,
+    markDirty,
     getFieldValues,
     isNumericField,
     getDefaultChartFields,
+    getDefaultNameField,
+    getDefaultValueField,
+    getTableDataKeys,
+    inferTableColumns,
     addComponent,
     updateComponentPosition,
     selectComponent,
     updateChartSchema,
+    updateTextSchema,
+    updateTableSchema,
     updateCustomOption,
     removeComponent,
+    duplicateSelectedComponent,
+    bringSelectedToFront,
+    sendSelectedToBack,
     clearData,
     autoSelectFields,
     applySchema,
