@@ -1,34 +1,48 @@
-import { computed, defineComponent, ref } from 'vue'
+import { computed, defineComponent, ref, type PropType } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { useEditorStore } from '../stores/editorStore'
+import { useEditorStore, type ChartType } from '../stores/editorStore'
 import { generateVueCode, downloadVueFile } from '../utils/codeGenerator'
+import { CHART_META, CORE_CHART_TYPES } from '../utils/chartOptions'
 
-/**
- * EditorHeader — 顶部导航栏（全栈重构）
- *
- * 变更：
- * - 【保存仪表盘】→ 调用 store.saveTask() 持久化到后端
- * - 新增【返回大厅】按钮 → router.push('/')
- * - 其余功能保持不变
- */
 export default defineComponent({
   name: 'EditorHeader',
-  setup() {
+  props: {
+    rightPanelVisible: {
+      type: Boolean,
+      default: true,
+    },
+    onAddChart: {
+      type: Function as PropType<(type: ChartType) => void>,
+      required: true,
+    },
+    onAddText: {
+      type: Function as PropType<() => void>,
+      required: true,
+    },
+    onAddTable: {
+      type: Function as PropType<() => void>,
+      required: true,
+    },
+    onToggleRightPanel: {
+      type: Function as PropType<() => void>,
+      required: true,
+    },
+  },
+  setup(props) {
     const store = useEditorStore()
     const router = useRouter()
 
-    // ==================== 导出代码对话框 ====================
     const codeDialogVisible = ref(false)
     const generatedCode = ref('')
     const copySuccess = ref(false)
 
     const saveLabel = computed(() => {
-      if (store.saveStatus === 'saving') return '保存中...'
+      if (store.saveStatus === 'saving') return '保存中'
       if (store.saveStatus === 'dirty') return '未保存'
       if (store.saveStatus === 'saved') return '已保存'
       if (store.saveStatus === 'error') return '保存失败'
-      return '保存仪表盘'
+      return '待编辑'
     })
 
     const saveTagType = computed(() => {
@@ -39,9 +53,7 @@ export default defineComponent({
     })
 
     const onExportCode = () => {
-      const schema = store.currentSchema
-      const code = generateVueCode(schema)
-      generatedCode.value = code
+      generatedCode.value = generateVueCode(store.currentSchema)
       codeDialogVisible.value = true
       copySuccess.value = false
     }
@@ -49,10 +61,6 @@ export default defineComponent({
     const onCopyCode = async () => {
       try {
         await navigator.clipboard.writeText(generatedCode.value)
-        copySuccess.value = true
-        setTimeout(() => {
-          copySuccess.value = false
-        }, 2000)
       } catch {
         const textarea = document.createElement('textarea')
         textarea.value = generatedCode.value
@@ -62,31 +70,25 @@ export default defineComponent({
         textarea.select()
         document.execCommand('copy')
         document.body.removeChild(textarea)
-        copySuccess.value = true
-        setTimeout(() => {
-          copySuccess.value = false
-        }, 2000)
       }
+      copySuccess.value = true
+      setTimeout(() => {
+        copySuccess.value = false
+      }, 2000)
     }
 
     const onDownloadCode = () => {
-      const filename = `${store.title || 'dashboard'}.vue`
-      downloadVueFile(generatedCode.value, filename)
+      downloadVueFile(generatedCode.value, `${store.title || 'dashboard'}.vue`)
     }
-
-    // ==================== 其他操作 ====================
 
     const onSave = async () => {
       if (!store.currentTaskId) {
-        ElMessage.warning('无法保存：无关联任务 ID')
+        ElMessage.warning('无法保存：当前没有关联任务')
         return
       }
       const ok = await store.saveTask()
-      if (ok) {
-        ElMessage.success('仪表盘已保存')
-      } else {
-        ElMessage.error('保存失败，请重试')
-      }
+      if (ok) ElMessage.success('仪表盘已保存')
+      else ElMessage.error('保存失败，请重试')
     }
 
     const onClearCanvas = () => {
@@ -94,7 +96,7 @@ export default defineComponent({
         '确定要清空画布上的所有组件吗？此操作不可撤销。',
         '清空画布',
         {
-          confirmButtonText: '确定清空',
+          confirmButtonText: '确认清空',
           cancelButtonText: '取消',
           type: 'warning',
         },
@@ -103,117 +105,157 @@ export default defineComponent({
           store.clearCanvas()
           ElMessage.success('画布已清空')
         })
-        .catch(() => {
-          // 用户取消
-        })
+        .catch(() => {})
     }
 
-    const onFullscreenPreview = () => {
-      store.toggleFullscreenPreview()
-    }
-
-    const onBackToHub = () => {
-      router.push('/')
-    }
+    const renderIconButton = (
+      title: string,
+      icon: string,
+      onClick: () => void,
+      extraClass = '',
+      type?: 'primary' | 'danger',
+      loading = false,
+    ) => (
+      <el-tooltip content={title} placement="bottom" show-after={250}>
+        <el-button
+          class={`editor-header__icon-button ${extraClass}`}
+          type={type}
+          icon={icon}
+          size="small"
+          text={!type}
+          loading={loading}
+          onClick={onClick}
+        />
+      </el-tooltip>
+    )
 
     return () => (
-      <header
-        class="editor-header"
-        style={{
-          height: '48px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '0 20px',
-          background: '#fff',
-          borderBottom: '1px solid #e4e7ed',
-          boxShadow: '0 1px 4px rgba(0, 0, 0, 0.04)',
-          zIndex: 100,
-          flexShrink: 0,
-        }}
-      >
-        {/* 左侧：品牌标识 + 返回大厅 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <el-button
-            icon="ArrowLeft"
-            size="default"
-            onClick={onBackToHub}
-          >
-            返回大厅
-          </el-button>
-          <el-divider direction="vertical" />
-          <div style={{
-            fontSize: '18px',
-            fontWeight: 700,
-            color: '#409eff',
-            letterSpacing: '0.5px',
-          }}>
-            📊 LiteBoard
-          </div>
-          <el-divider direction="vertical" />
+      <header class="editor-header">
+        <div class="editor-header__left">
+          <el-tooltip content="返回大厅" placement="bottom" show-after={250}>
+            <el-button
+              class="editor-header__back"
+              text
+              icon="ArrowLeft"
+              onClick={() => router.push('/')}
+            />
+          </el-tooltip>
+          <div class="editor-header__brand">LiteBoard</div>
           <el-input
+            class="editor-header__title"
             model-value={store.title}
             onUpdate:model-value={(val: string) => store.setTitle(val)}
             placeholder="仪表盘名称"
             size="small"
-            style={{ width: '200px' }}
             clearable
           />
-        </div>
-
-        {/* 右侧：操作按钮组 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           {store.saveStatus !== 'idle' && (
-            <el-tag type={saveTagType.value} effect="light">
+            <el-tag class="editor-header__save-tag" type={saveTagType.value} effect="dark" round>
               {saveLabel.value}
             </el-tag>
           )}
-          <el-button
-            type="primary"
-            icon="FolderChecked"
-            size="default"
-            onClick={onSave}
-            loading={store.saveStatus === 'saving'}
-          >
-            保存仪表盘
-          </el-button>
-
-          <el-button
-            type="warning"
-            icon="Delete"
-            size="default"
-            plain
-            onClick={onClearCanvas}
-          >
-            清空画布
-          </el-button>
-
-          <el-divider direction="vertical" />
-
-          <el-button
-            type="success"
-            icon="Document"
-            size="default"
-            onClick={onExportCode}
-          >
-            导出 Vue
-          </el-button>
-
-          <el-button
-            type={store.isFullscreenPreview ? 'danger' : 'info'}
-            icon={store.isFullscreenPreview ? 'Close' : 'FullScreen'}
-            size="default"
-            plain
-            onClick={onFullscreenPreview}
-          >
-            {store.isFullscreenPreview ? '退出预览' : '全屏预览'}
-          </el-button>
         </div>
 
-        {/* ==================== 导出代码对话框 ==================== */}
+        {!store.isFullscreenPreview && (
+          <div class="editor-header__center">
+            <el-dropdown
+              trigger="click"
+              popper-class="editor-chart-dropdown"
+              onCommand={(type: ChartType) => props.onAddChart(type)}
+            >
+              {{
+                default: () => (
+                  <button class="editor-header__tool" type="button">
+                    <span class="editor-header__tool-icon">◔</span>
+                    <span>图表</span>
+                  </button>
+                ),
+                dropdown: () => (
+                  <el-dropdown-menu>
+                    {CORE_CHART_TYPES.map((type) => (
+                      <el-dropdown-item key={type} command={type}>
+                        <span class="editor-tool-menu-item">
+                          <span>{CHART_META[type].icon}</span>
+                          <span>{CHART_META[type].label}</span>
+                        </span>
+                      </el-dropdown-item>
+                    ))}
+                  </el-dropdown-menu>
+                ),
+              }}
+            </el-dropdown>
+            <button class="editor-header__tool" type="button" onClick={() => props.onAddText()}>
+              <span class="editor-header__tool-icon">T</span>
+              <span>富文本</span>
+            </button>
+            <button class="editor-header__tool" type="button" onClick={() => props.onAddTable()}>
+              <span class="editor-header__tool-icon">▦</span>
+              <span>表格</span>
+            </button>
+          </div>
+        )}
+
+        <div class="editor-header__right">
+          {!store.isFullscreenPreview && (
+            <el-popover trigger="click" placement="bottom-end" width={280}>
+              {{
+                reference: () => (
+                  <el-button
+                    class="editor-header__icon-button"
+                    title="画布设置"
+                    icon="Setting"
+                    size="small"
+                    text
+                  />
+                ),
+                default: () => (
+                  <div class="canvas-settings-popover">
+                    <div class="canvas-settings-popover__title">画布设置</div>
+                    <el-form label-position="top" size="small">
+                      <div class="canvas-settings-popover__grid">
+                        <el-form-item label="宽度">
+                          <el-input-number
+                            model-value={store.canvasConfig.width}
+                            onUpdate:model-value={(v: number) => store.updateCanvasConfig({ width: v })}
+                            controls={false}
+                            style={{ width: '100%' }}
+                          />
+                        </el-form-item>
+                        <el-form-item label="高度">
+                          <el-input-number
+                            model-value={store.canvasConfig.height}
+                            onUpdate:model-value={(v: number) => store.updateCanvasConfig({ height: v })}
+                            controls={false}
+                            style={{ width: '100%' }}
+                          />
+                        </el-form-item>
+                      </div>
+                      <el-form-item label="缩放比例">
+                        <el-slider
+                          model-value={store.canvasConfig.scale * 100}
+                          onUpdate:model-value={(v: number) => store.updateCanvasConfig({ scale: v / 100 })}
+                          min={50}
+                          max={200}
+                          step={10}
+                          format-tooltip={(v: number) => `${v}%`}
+                        />
+                      </el-form-item>
+                    </el-form>
+                  </div>
+                ),
+              }}
+            </el-popover>
+          )}
+          {renderIconButton(store.isFullscreenPreview ? '退出预览' : '全屏预览', store.isFullscreenPreview ? 'Close' : 'View', () => store.toggleFullscreenPreview())}
+          {renderIconButton('保存', 'FolderChecked', onSave, 'editor-header__icon-button--primary', 'primary', store.saveStatus === 'saving')}
+          {renderIconButton('导出 Vue', 'Document', onExportCode)}
+          {!store.isFullscreenPreview && renderIconButton(props.rightPanelVisible ? '收起配置' : '展开配置', props.rightPanelVisible ? 'Fold' : 'Expand', props.onToggleRightPanel)}
+          {!store.isFullscreenPreview && renderIconButton('清空画布', 'Delete', onClearCanvas, 'editor-header__icon-button--danger', 'danger')}
+        </div>
+
         <el-dialog
           v-model={codeDialogVisible.value}
-          title="📤 导出仪表盘 Vue 组件"
+          title="导出仪表盘 Vue 组件"
           width="80%"
           top="5vh"
           close-on-click-modal={false}
@@ -224,55 +266,30 @@ export default defineComponent({
           {{
             default: () => (
               <div>
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  marginBottom: '12px',
-                }}>
-                  <span style={{ fontSize: '13px', color: '#909399' }}>
-                    以下代码可直接复制到 .vue 文件中运行（需安装 echarts、vue-echarts）
-                  </span>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <el-button
-                      type="primary"
-                      icon="CopyDocument"
-                      size="small"
-                      onClick={onCopyCode}
-                    >
-                      {copySuccess.value ? '已复制 ✓' : '点击复制'}
+                <div class="export-dialog-toolbar">
+                  <span>以下代码可复制到 .vue 文件中运行，需要安装 echarts 与 vue-echarts。</span>
+                  <div class="export-dialog-actions">
+                    <el-button type="primary" icon="CopyDocument" size="small" onClick={onCopyCode}>
+                      {copySuccess.value ? '已复制' : '复制代码'}
                     </el-button>
-                    <el-button
-                      type="success"
-                      icon="Download"
-                      size="small"
-                      onClick={onDownloadCode}
-                    >
-                      下载 .vue 文件
+                    <el-button type="success" icon="Download" size="small" onClick={onDownloadCode}>
+                      下载 .vue
                     </el-button>
                   </div>
                 </div>
-
                 <el-input
                   type="textarea"
                   rows={24}
                   model-value={generatedCode.value}
                   readonly
-                  style={{
-                    width: '100%',
-                    fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
-                    fontSize: '13px',
-                    lineHeight: '1.6',
-                  }}
+                  class="export-dialog-code"
                 />
               </div>
             ),
             footer: () => (
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                <el-button onClick={() => { codeDialogVisible.value = false }}>
-                  关闭
-                </el-button>
-              </div>
+              <el-button onClick={() => { codeDialogVisible.value = false }}>
+                关闭
+              </el-button>
             ),
           }}
         </el-dialog>

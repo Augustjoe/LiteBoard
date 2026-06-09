@@ -10,15 +10,18 @@ import {
   type TableSchema,
   type TextSchema,
 } from '../stores/editorStore'
-import { CHART_META, CORE_CHART_TYPES } from '../utils/chartOptions'
+import { CHART_META, CORE_CHART_TYPES, getChartBlockReason } from '../utils/chartOptions'
 
 const chartTypesUsingXY = new Set<ChartType>(['bar', 'line', 'scatter'])
 const chartTypesUsingNameValue = new Set<ChartType>(['pie', 'funnel'])
 
 export default defineComponent({
   name: 'ChartConfigPanel',
-  setup() {
+  emits: ['openDataManager'],
+  setup(_props, { emit }) {
     const store = useEditorStore()
+    const activeTab = ref<'data' | 'style' | 'advanced'>('data')
+    const fieldSearch = ref('')
     const jsExtension = javascript()
     const themeExtension = oneDark
 
@@ -56,6 +59,44 @@ export default defineComponent({
       }
     })
 
+    const componentLabel = computed(() => {
+      if (isText.value) return '文本'
+      if (isTable.value) return '表格'
+      if (isChart.value) return CHART_META[chartSchema.value.chartType]?.label ?? '图表'
+      return '组件'
+    })
+
+    const chartReason = computed(() => {
+      if (!isChart.value) return null
+      return getChartBlockReason(chartSchema.value, store.globalData)
+    })
+
+    const chartReasonText = computed(() => {
+      const reason = chartReason.value
+      if (!reason) return ''
+      if (reason === 'no_global_data') return '当前仪表盘还没有数据集，请先更新数据集。'
+      if (reason === 'no_custom_code') return '当前图表需要 JS 转换代码。'
+      if (reason === 'no_binding') return '请补齐当前图表需要的数据字段。'
+      if (reason === 'field_not_found') return '绑定字段在当前数据集中不存在。'
+      if (reason === 'empty') return '绑定字段为空数组。'
+      if (reason === 'length_mismatch') return '绑定字段数组长度不一致。'
+      if (reason === 'complex_x') return '维度字段包含对象值，请改用 JS 转换。'
+      if (reason === 'non_numeric_value') return '数值字段需要是数值数组。'
+      return '请检查数据绑定配置。'
+    })
+
+    const tableDataKeys = computed(() => store.getTableDataKeys())
+
+    const filterFields = (fields: string[]) => {
+      const keyword = fieldSearch.value.trim().toLowerCase()
+      if (!keyword) return fields
+      return fields.filter((field) => field.toLowerCase().includes(keyword))
+    }
+
+    const filteredDimensionFields = computed(() => filterFields(store.dimensionFields))
+    const filteredNumericFields = computed(() => filterFields(store.numericFields))
+    const filteredTableKeys = computed(() => filterFields(tableDataKeys.value))
+
     const localJsonText = ref('{}')
     const jsonError = ref<string | null>(null)
     let isProgrammaticUpdate = false
@@ -74,6 +115,13 @@ export default defineComponent({
         })
       },
       { immediate: true },
+    )
+
+    watch(
+      () => store.selectedComponentId,
+      () => {
+        activeTab.value = 'data'
+      },
     )
 
     function tryFormatJson(raw: string): string {
@@ -101,11 +149,6 @@ export default defineComponent({
       }
     }, 500)
 
-    const onJsonInput = (val: string) => {
-      localJsonText.value = val
-      debouncedValidateAndCommit(val)
-    }
-
     const updateChart = (partial: Partial<ChartSchema>) => store.updateChartSchema(partial)
     const updateText = (partial: Partial<TextSchema>) => store.updateTextSchema(partial)
     const updateTable = (partial: Partial<TableSchema>) => store.updateTableSchema(partial)
@@ -126,240 +169,38 @@ export default defineComponent({
       updateChart(next)
     }
 
-    const componentLabel = computed(() => {
-      if (isText.value) return '文本组件'
-      if (isTable.value) return '表格组件'
-      if (isChart.value) return `${CHART_META[chartSchema.value.chartType]?.label ?? '图表'}组件`
-      return '组件'
-    })
-
-    const tableDataKeys = computed(() => store.getTableDataKeys())
-
-    const kindLabel = (kind: string) => {
-      if (kind === 'field-array') return '字段数组'
-      if (kind === 'table-array') return '数组对象'
-      if (kind === 'mixed') return '混合数组'
-      return '空数组'
-    }
-
-    const kindType = (kind: string) => {
-      if (kind === 'field-array') return 'success'
-      if (kind === 'table-array') return 'warning'
-      if (kind === 'mixed') return 'danger'
-      return 'info'
-    }
-
-    const renderOperations = () => (
-      <div style={{
-        marginBottom: '16px',
-        padding: '12px',
-        background: '#f5f7fa',
-        borderRadius: '6px',
-        border: '1px solid #ebeef5',
-      }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          <div>
-            <div style={{ fontSize: '13px', fontWeight: 600, color: '#303133' }}>
-              组件操作
-            </div>
-            <div style={{ fontSize: '11px', color: '#909399', marginTop: '2px' }}>
-              当前: {componentLabel.value} ({store.selectedComponent?.id})
-            </div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-            <el-button icon="CopyDocument" onClick={store.duplicateSelectedComponent}>复制</el-button>
-            <el-button icon="Top" onClick={store.bringSelectedToFront}>置顶</el-button>
-            <el-button icon="Bottom" onClick={store.sendSelectedToBack}>置底</el-button>
-            <el-button
-              type="danger"
-              icon="Delete"
-              plain
-              onClick={() => store.selectedComponent && store.removeComponent(store.selectedComponent.id)}
-            >
-              删除
-            </el-button>
-          </div>
-        </div>
-      </div>
+    const renderFieldSelect = (
+      label: string,
+      value: string | undefined,
+      onChange: (value: string) => void,
+      placeholder = '选择字段',
+    ) => (
+      <el-form-item label={label}>
+        <el-select
+          model-value={value || ''}
+          onUpdate:model-value={onChange}
+          placeholder={placeholder}
+          style={{ width: '100%' }}
+          clearable
+          disabled={store.availableFields.length === 0}
+        >
+          {store.availableFields.map((field) => (
+            <el-option key={field} label={field} value={field} />
+          ))}
+        </el-select>
+      </el-form-item>
     )
 
-    const renderDataSummary = () => (
-      <div style={{
-        marginBottom: '16px',
-        padding: '12px',
-        background: '#ecf5ff',
-        borderRadius: '6px',
-        border: '1px solid #d9ecff',
-      }}>
-        <div style={{ fontSize: '13px', fontWeight: 600, color: '#409eff', marginBottom: '8px' }}>
-          当前数据集
-        </div>
-        {store.globalData === null ? (
-          <el-alert
-            title="尚未创建当前数据集"
-            type="warning"
-            description="图表和表格需要先在左侧创建或更新数据集"
-            show-icon
-            closable={false}
-          />
-        ) : (
-          <div style={{ fontSize: '12px', color: '#606266', lineHeight: '1.6' }}>
-            <span style={{ color: '#67c23a', fontWeight: 600 }}>当前数据集已就绪</span>
-            <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-              {store.dataPoolEntries.map((entry) => (
-                <el-tag key={entry.name} type={kindType(entry.kind)} size="small">
-                  {entry.name} · {kindLabel(entry.kind)} · {entry.length}
-                </el-tag>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    )
-
-    const renderTextConfig = () => (
-      <div style={{ padding: '12px', background: '#f5f7fa', borderRadius: '6px' }}>
-        <div style={{ fontSize: '13px', fontWeight: 600, color: '#303133', marginBottom: '12px' }}>
-          文本配置
-        </div>
-        <el-form label-position="top" size="default">
-          <el-form-item label="内容">
-            <el-input
-              type="textarea"
-              rows={4}
-              model-value={textSchema.value.content}
-              onUpdate:model-value={(val: string) => updateText({ content: val })}
-            />
-          </el-form-item>
-          <el-form-item label="字号">
-            <el-input-number
-              model-value={textSchema.value.fontSize}
-              onUpdate:model-value={(val: number) => updateText({ fontSize: val || 16 })}
-              min={10}
-              max={120}
-              style={{ width: '100%' }}
-            />
-          </el-form-item>
-          <el-form-item label="字重">
-            <el-select
-              model-value={textSchema.value.fontWeight}
-              onUpdate:model-value={(val: string) => updateText({ fontWeight: val })}
-              style={{ width: '100%' }}
-            >
-              <el-option label="常规" value="400" />
-              <el-option label="中等" value="500" />
-              <el-option label="加粗" value="700" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="颜色">
-            <el-color-picker
-              model-value={textSchema.value.color}
-              onUpdate:model-value={(val: string) => updateText({ color: val || '#303133' })}
-            />
-          </el-form-item>
-          <el-form-item label="对齐">
-            <el-radio-group
-              model-value={textSchema.value.textAlign}
-              onUpdate:model-value={(val: 'left' | 'center' | 'right') => updateText({ textAlign: val })}
-            >
-              <el-radio-button label="left">左</el-radio-button>
-              <el-radio-button label="center">中</el-radio-button>
-              <el-radio-button label="right">右</el-radio-button>
-            </el-radio-group>
-          </el-form-item>
-          <el-form-item label="背景">
-            <el-select
-              model-value={textSchema.value.background}
-              onUpdate:model-value={(val: string) => updateText({ background: val })}
-              style={{ width: '100%' }}
-            >
-              <el-option label="透明" value="transparent" />
-              <el-option label="白底" value="#ffffff" />
-              <el-option label="浅灰" value="#f5f7fa" />
-            </el-select>
-          </el-form-item>
-        </el-form>
-      </div>
-    )
-
-    const renderTableConfig = () => (
-      <div style={{ padding: '12px', background: '#f5f7fa', borderRadius: '6px' }}>
-        <div style={{ fontSize: '13px', fontWeight: 600, color: '#303133', marginBottom: '12px' }}>
-          表格配置
-        </div>
-        <el-form label-position="top" size="default">
-          <el-form-item label="标题">
-            <el-input
-              model-value={tableSchema.value.title}
-              onUpdate:model-value={(val: string) => updateTable({ title: val })}
-            />
-          </el-form-item>
-          <el-form-item label="数据源">
-            <el-select
-              model-value={tableSchema.value.dataKey}
-              onUpdate:model-value={(val: string) => updateTable({ dataKey: val })}
-              placeholder={tableDataKeys.value.length ? '选择数组对象数据集' : '暂无数组对象数据集'}
-              disabled={tableDataKeys.value.length === 0}
-              style={{ width: '100%' }}
-            >
-              {tableDataKeys.value.map((key) => (
-                <el-option key={key} label={key} value={key} />
-              ))}
-            </el-select>
-          </el-form-item>
-          <el-form-item label="显示表头">
-            <el-switch
-              model-value={tableSchema.value.showHeader}
-              onUpdate:model-value={(val: boolean) => updateTable({ showHeader: val })}
-            />
-          </el-form-item>
-          <el-form-item label="最大行数">
-            <el-input-number
-              model-value={tableSchema.value.maxRows}
-              onUpdate:model-value={(val: number) => updateTable({ maxRows: val || 8 })}
-              min={1}
-              max={100}
-              style={{ width: '100%' }}
-            />
-          </el-form-item>
-          <el-form-item label="显示列">
-            {tableSchema.value.columns.length === 0 ? (
-              <el-alert title="选择数据源后自动识别列" type="info" closable={false} />
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {tableSchema.value.columns.map((column) => (
-                  <el-checkbox
-                    key={column.key}
-                    model-value={column.visible}
-                    onUpdate:model-value={(val: boolean) => {
-                      updateTable({
-                        columns: tableSchema.value.columns.map((item) =>
-                          item.key === column.key ? { ...item, visible: val } : item
-                        ),
-                      })
-                    }}
-                  >
-                    {column.label}
-                  </el-checkbox>
-                ))}
-              </div>
-            )}
-          </el-form-item>
-        </el-form>
-      </div>
-    )
-
-    const renderChartFields = () => {
+    const renderChartDataFields = () => {
       const type = chartSchema.value.chartType
 
       if (chartSchema.value.useCustomDataCode) {
         return (
-          <el-form-item label="JS 数据转换代码">
-            <div style={{ fontSize: '11px', color: '#909399', marginBottom: '4px' }}>
-              变量 <strong>res</strong> 代表当前仪表盘数据集。柱/线/散点返回 <code>{`{ xAxis, yAxis }`}</code>，
-              饼/漏斗返回 <code>{`{ name, value }`}</code>，仪表盘返回 <code>{`{ value }`}</code>，雷达返回 <code>{`{ indicator, value }`}</code>。
+          <el-form-item label="JS 数据转换">
+            <div class="config-help">
+              变量 <strong>res</strong> 代表当前数据集。雷达图返回 <code>{`{ indicator, value }`}</code>，其他图表按类型返回字段数组。
             </div>
-            <div style={{ border: '1px solid #dcdfe6', borderRadius: '4px', overflow: 'hidden', height: '180px', width: '100%' }}>
+            <div class="code-editor-panel">
               <Codemirror
                 model-value={chartSchema.value.customDataCode || ''}
                 onUpdate:model-value={(val: string) => updateChart({ customDataCode: val })}
@@ -373,7 +214,7 @@ export default defineComponent({
       if (type === 'radar') {
         return (
           <el-alert
-            title="雷达图 v1 使用 JS 转换生成指标和值"
+            title="雷达图 v1 使用 JS 转换生成 indicator/value"
             type="info"
             show-icon
             closable={false}
@@ -384,83 +225,103 @@ export default defineComponent({
       if (chartTypesUsingNameValue.has(type)) {
         return (
           <>
-            <el-form-item label="名称字段">
-              <el-select
-                model-value={chartSchema.value.nameField || ''}
-                onUpdate:model-value={(val: string) => updateChart({ nameField: val })}
-                style={{ width: '100%' }}
-                clearable
-                disabled={store.availableFields.length === 0}
-              >
-                {store.availableFields.map((field) => <el-option key={field} label={field} value={field} />)}
-              </el-select>
-            </el-form-item>
-            <el-form-item label="数值字段">
-              <el-select
-                model-value={chartSchema.value.valueField || ''}
-                onUpdate:model-value={(val: string) => updateChart({ valueField: val })}
-                style={{ width: '100%' }}
-                clearable
-                disabled={store.availableFields.length === 0}
-              >
-                {store.availableFields.map((field) => <el-option key={field} label={field} value={field} />)}
-              </el-select>
-            </el-form-item>
+            {renderFieldSelect('名称字段', chartSchema.value.nameField, (val) => updateChart({ nameField: val }))}
+            {renderFieldSelect('数值字段', chartSchema.value.valueField, (val) => updateChart({ valueField: val }))}
           </>
         )
       }
 
       if (type === 'gauge') {
-        return (
-          <el-form-item label="数值字段">
-            <el-select
-              model-value={chartSchema.value.valueField || ''}
-              onUpdate:model-value={(val: string) => updateChart({ valueField: val })}
-              style={{ width: '100%' }}
-              clearable
-              disabled={store.availableFields.length === 0}
-            >
-              {store.availableFields.map((field) => <el-option key={field} label={field} value={field} />)}
-            </el-select>
-          </el-form-item>
-        )
+        return renderFieldSelect('数值字段', chartSchema.value.valueField, (val) => updateChart({ valueField: val }))
       }
 
       return (
         <>
-          <el-form-item label="X 轴 / 维度字段">
-            <el-select
-              model-value={chartSchema.value.xAxisField}
-              onUpdate:model-value={(val: string) => updateChart({ xAxisField: val })}
-              style={{ width: '100%' }}
-              clearable
-              disabled={store.availableFields.length === 0}
-            >
-              {store.availableFields.map((field) => <el-option key={field} label={field} value={field} />)}
-            </el-select>
-          </el-form-item>
-          <el-form-item label="Y 轴 / 指标字段">
-            <el-select
-              model-value={chartSchema.value.yAxisField}
-              onUpdate:model-value={(val: string) => updateChart({ yAxisField: val })}
-              style={{ width: '100%' }}
-              clearable
-              disabled={store.availableFields.length === 0}
-            >
-              {store.availableFields.map((field) => <el-option key={field} label={field} value={field} />)}
-            </el-select>
-          </el-form-item>
+          {renderFieldSelect('维度字段', chartSchema.value.xAxisField, (val) => updateChart({ xAxisField: val }))}
+          {renderFieldSelect('指标字段', chartSchema.value.yAxisField, (val) => updateChart({ yAxisField: val }))}
         </>
       )
     }
 
-    const renderChartConfig = () => (
-      <>
-        {renderDataSummary()}
-        <div style={{ marginBottom: '16px', padding: '12px', background: '#f5f7fa', borderRadius: '6px' }}>
-          <div style={{ fontSize: '13px', fontWeight: 600, color: '#303133', marginBottom: '12px' }}>
-            图表配置
-          </div>
+    const renderDataTab = () => (
+      <div class="config-section">
+        {isChart.value && (
+          <el-form label-position="top" size="default">
+            <el-form-item label="图表类型">
+              <el-select
+                model-value={chartSchema.value.chartType}
+                onUpdate:model-value={onChartTypeChange}
+                style={{ width: '100%' }}
+              >
+                {CORE_CHART_TYPES.map((type) => (
+                  <el-option key={type} label={`${CHART_META[type].icon} ${CHART_META[type].label}`} value={type} />
+                ))}
+              </el-select>
+            </el-form-item>
+            <el-form-item label="数据来源">
+              <el-radio-group
+                model-value={chartSchema.value.useCustomDataCode || false}
+                onUpdate:model-value={(val: string | number | boolean) => updateChart({ useCustomDataCode: Boolean(val) })}
+              >
+                <el-radio value={false} disabled={chartSchema.value.chartType === 'radar'}>数据集字段</el-radio>
+                <el-radio value={true}>JS 转换</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            {renderChartDataFields()}
+            {chartReasonText.value && (
+              <el-alert title={chartReasonText.value} type="warning" show-icon closable={false} />
+            )}
+          </el-form>
+        )}
+
+        {isTable.value && (
+          <el-form label-position="top" size="default">
+            <el-form-item label="数据源">
+              <el-select
+                model-value={tableSchema.value.dataKey}
+                onUpdate:model-value={(val: string) => updateTable({ dataKey: val })}
+                placeholder={tableDataKeys.value.length ? '选择数组对象数据集' : '暂无数组对象数据集'}
+                disabled={tableDataKeys.value.length === 0}
+                style={{ width: '100%' }}
+              >
+                {tableDataKeys.value.map((key) => <el-option key={key} label={key} value={key} />)}
+              </el-select>
+            </el-form-item>
+            <el-form-item label="显示列">
+              {tableSchema.value.columns.length === 0 ? (
+                <el-alert title="选择数据源后自动识别列" type="info" closable={false} />
+              ) : (
+                <div class="column-check-list">
+                  {tableSchema.value.columns.map((column) => (
+                    <el-checkbox
+                      key={column.key}
+                      model-value={column.visible}
+                      onUpdate:model-value={(val: boolean) => {
+                        updateTable({
+                          columns: tableSchema.value.columns.map((item) =>
+                            item.key === column.key ? { ...item, visible: val } : item
+                          ),
+                        })
+                      }}
+                    >
+                      {column.label}
+                    </el-checkbox>
+                  ))}
+                </div>
+              )}
+            </el-form-item>
+          </el-form>
+        )}
+
+        {isText.value && (
+          <el-alert title="文本组件不依赖数据集，可在样式中编辑内容和视觉属性。" type="info" closable={false} />
+        )}
+      </div>
+    )
+
+    const renderStyleTab = () => (
+      <div class="config-section">
+        {isChart.value && (
           <el-form label-position="top" size="default">
             <el-form-item label="图表标题">
               <el-input
@@ -469,124 +330,243 @@ export default defineComponent({
                 placeholder="图表标题"
               />
             </el-form-item>
-            <el-form-item label="图表类型">
-              <el-select
-                model-value={chartSchema.value.chartType}
-                onUpdate:model-value={onChartTypeChange}
-                style={{ width: '100%' }}
-              >
-                {CORE_CHART_TYPES.map((type) => (
-                  <el-option
-                    key={type}
-                    label={`${CHART_META[type].icon} ${CHART_META[type].label}`}
-                    value={type}
-                  />
-                ))}
-              </el-select>
-            </el-form-item>
             <el-form-item label="主题颜色">
               <el-color-picker
                 model-value={chartSchema.value.color || '#409eff'}
                 onUpdate:model-value={(val: string) => updateChart({ color: val || '#409eff' })}
               />
             </el-form-item>
-            <el-form-item label="数据来源模式">
-              <el-radio-group
-                model-value={chartSchema.value.useCustomDataCode || false}
-                onUpdate:model-value={(val: string | number | boolean) => updateChart({ useCustomDataCode: Boolean(val) })}
+          </el-form>
+        )}
+
+        {isText.value && (
+          <el-form label-position="top" size="default">
+            <el-form-item label="内容">
+              <el-input
+                type="textarea"
+                rows={4}
+                model-value={textSchema.value.content}
+                onUpdate:model-value={(val: string) => updateText({ content: val })}
+              />
+            </el-form-item>
+            <el-form-item label="字号">
+              <el-input-number
+                model-value={textSchema.value.fontSize}
+                onUpdate:model-value={(val: number) => updateText({ fontSize: val || 16 })}
+                min={10}
+                max={120}
+                style={{ width: '100%' }}
+              />
+            </el-form-item>
+            <el-form-item label="字重">
+              <el-select
+                model-value={textSchema.value.fontWeight}
+                onUpdate:model-value={(val: string) => updateText({ fontWeight: val })}
+                style={{ width: '100%' }}
               >
-                <el-radio value={false} disabled={chartSchema.value.chartType === 'radar'}>数据集字段</el-radio>
-                <el-radio value={true}>手写 JS 代码</el-radio>
+                <el-option label="常规" value="400" />
+                <el-option label="中等" value="500" />
+                <el-option label="加粗" value="700" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="颜色">
+              <el-color-picker
+                model-value={textSchema.value.color}
+                onUpdate:model-value={(val: string) => updateText({ color: val || '#303133' })}
+              />
+            </el-form-item>
+            <el-form-item label="对齐">
+              <el-radio-group
+                model-value={textSchema.value.textAlign}
+                onUpdate:model-value={(val: 'left' | 'center' | 'right') => updateText({ textAlign: val })}
+              >
+                <el-radio-button label="left">左</el-radio-button>
+                <el-radio-button label="center">中</el-radio-button>
+                <el-radio-button label="right">右</el-radio-button>
               </el-radio-group>
             </el-form-item>
-            {renderChartFields()}
+            <el-form-item label="背景">
+              <el-select
+                model-value={textSchema.value.background}
+                onUpdate:model-value={(val: string) => updateText({ background: val })}
+                style={{ width: '100%' }}
+              >
+                <el-option label="透明" value="transparent" />
+                <el-option label="白底" value="#ffffff" />
+                <el-option label="浅灰" value="#f5f7fa" />
+              </el-select>
+            </el-form-item>
           </el-form>
-        </div>
-        <div style={{
-          marginBottom: '16px',
-          padding: '12px',
-          background: '#fafafa',
-          borderRadius: '6px',
-          border: jsonError.value ? '1px solid #f56c6c' : '1px solid #ebeef5',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-            <span style={{ fontSize: '13px', fontWeight: 600, color: '#303133' }}>ECharts JSON 配置</span>
-            {jsonError.value ? <el-tag type="danger" size="small">格式错误</el-tag> : <el-tag type="success" size="small">有效 JSON</el-tag>}
-          </div>
-          <el-input
-            type="textarea"
-            rows={12}
-            placeholder={'输入 ECharts JSON 配置...\n\n例如：\n{\n  "tooltip": { "trigger": "item" },\n  "series": [{ "radius": "70%" }]\n}'}
-            model-value={localJsonText.value}
-            onUpdate:model-value={onJsonInput}
-            style={{ width: '100%' }}
-          />
-          {jsonError.value && (
-            <div style={{ marginTop: '8px', color: '#f56c6c', fontSize: '12px', wordBreak: 'break-all' }}>
-              {jsonError.value}
-            </div>
-          )}
-        </div>
-      </>
-    )
+        )}
 
-    const renderPosition = () => store.selectedComponent && (
-      <div style={{
-        marginTop: '12px',
-        padding: '12px',
-        background: '#f5f7fa',
-        borderRadius: '6px',
-        fontSize: '12px',
-        color: '#909399',
-        lineHeight: '1.8',
-      }}>
-        <div style={{ fontWeight: 600, marginBottom: '4px', color: '#606266' }}>位置 & 尺寸</div>
-        <div>X: <strong style={{ color: '#409eff' }}>{store.selectedComponent.position.x}</strong> px</div>
-        <div>Y: <strong style={{ color: '#409eff' }}>{store.selectedComponent.position.y}</strong> px</div>
-        <div>宽度: <strong style={{ color: '#409eff' }}>{store.selectedComponent.position.w}</strong> px</div>
-        <div>高度: <strong style={{ color: '#409eff' }}>{store.selectedComponent.position.h}</strong> px</div>
-        <div>层级: <strong style={{ color: '#409eff' }}>{store.selectedComponent.zIndex}</strong></div>
+        {isTable.value && (
+          <el-form label-position="top" size="default">
+            <el-form-item label="标题">
+              <el-input
+                model-value={tableSchema.value.title}
+                onUpdate:model-value={(val: string) => updateTable({ title: val })}
+              />
+            </el-form-item>
+            <el-form-item label="显示表头">
+              <el-switch
+                model-value={tableSchema.value.showHeader}
+                onUpdate:model-value={(val: boolean) => updateTable({ showHeader: val })}
+              />
+            </el-form-item>
+            <el-form-item label="最大行数">
+              <el-input-number
+                model-value={tableSchema.value.maxRows}
+                onUpdate:model-value={(val: number) => updateTable({ maxRows: val || 8 })}
+                min={1}
+                max={100}
+                style={{ width: '100%' }}
+              />
+            </el-form-item>
+          </el-form>
+        )}
       </div>
     )
 
-    return () => (
-      <div class="config-panel" style={{ padding: '20px', height: '100%', overflowY: 'auto' }}>
-        <div style={{ marginBottom: '20px', borderBottom: '1px solid #ebeef5', paddingBottom: '12px' }}>
-          <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: '#303133' }}>
-            {store.selectedComponent ? componentLabel.value : '组件配置'}
-          </h3>
-        </div>
-
-        {!store.selectedComponent ? (
-          <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '12px',
-            padding: '40px 20px',
-            color: '#909399',
-          }}>
-            <div style={{ fontSize: '36px', opacity: 0.4 }}>👆</div>
-            <div style={{ fontSize: '14px', textAlign: 'center' }}>点击画布上的组件进行配置</div>
+    const renderAdvancedTab = () => (
+      <div class="config-section">
+        {isChart.value && (
+          <div class="advanced-block">
+            <div class="advanced-block__title">ECharts JSON</div>
+            <el-input
+              type="textarea"
+              rows={12}
+              placeholder={'输入 ECharts JSON 配置...\n\n例如：\n{\n  "tooltip": { "trigger": "item" },\n  "series": [{ "radius": "70%" }]\n}'}
+              model-value={localJsonText.value}
+              onUpdate:model-value={(val: string) => {
+                localJsonText.value = val
+                debouncedValidateAndCommit(val)
+              }}
+              style={{ width: '100%' }}
+            />
+            {jsonError.value && <div class="config-error">{jsonError.value}</div>}
           </div>
-        ) : (
-          <>
-            {renderOperations()}
-            {isChart.value && renderChartConfig()}
-            {isText.value && renderTextConfig()}
-            {isTable.value && (
-              <>
-                {renderDataSummary()}
-                {renderTableConfig()}
-              </>
-            )}
-            {!isChart.value && !isText.value && !isTable.value && (
-              <el-alert title="暂未支持该组件类型的配置面板" type="info" closable={false} />
-            )}
-            {renderPosition()}
-          </>
         )}
+
+        {store.selectedComponent && (
+          <div class="advanced-block">
+            <div class="advanced-block__title">位置与尺寸</div>
+            <div class="position-grid">
+              <span>X</span><strong>{store.selectedComponent.position.x}</strong>
+              <span>Y</span><strong>{store.selectedComponent.position.y}</strong>
+              <span>宽</span><strong>{store.selectedComponent.position.w}</strong>
+              <span>高</span><strong>{store.selectedComponent.position.h}</strong>
+              <span>层级</span><strong>{store.selectedComponent.zIndex}</strong>
+            </div>
+          </div>
+        )}
+
+        {store.selectedComponent && (
+          <div class="advanced-block">
+            <div class="advanced-block__title">组件操作</div>
+            <div class="advanced-actions">
+              <el-button icon="CopyDocument" onClick={store.duplicateSelectedComponent}>复制</el-button>
+              <el-button icon="Top" onClick={store.bringSelectedToFront}>置顶</el-button>
+              <el-button icon="Bottom" onClick={store.sendSelectedToBack}>置底</el-button>
+              <el-button
+                type="danger"
+                icon="Delete"
+                plain
+                onClick={() => store.selectedComponent && store.removeComponent(store.selectedComponent.id)}
+              >
+                删除
+              </el-button>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+
+    const renderFieldGroup = (title: string, fields: string[], type: 'dimension' | 'metric' | 'dataset') => (
+      <div class="field-group">
+        <div class="field-group__title">{title}</div>
+        {fields.length === 0 ? (
+          <div class="field-group__empty">暂无字段</div>
+        ) : (
+          fields.map((field) => (
+            <div class={['field-row', `field-row--${type}`]} key={`${type}-${field}`}>
+              <span>{type === 'metric' ? '#' : type === 'dimension' ? 'T' : '▦'}</span>
+              <span>{field}</span>
+            </div>
+          ))
+        )}
+      </div>
+    )
+
+    const renderFieldsPanel = () => (
+      <aside class="fields-panel">
+        <div class="fields-panel__header">
+          <div>
+            <div class="fields-panel__title">数据集</div>
+            <div class="fields-panel__subtitle">{store.globalData ? `${store.dataPoolEntries.length} 个条目` : '未创建'}</div>
+          </div>
+          <el-button link size="small" onClick={() => emit('openDataManager')}>管理</el-button>
+        </div>
+        <el-input
+          model-value={fieldSearch.value}
+          onUpdate:model-value={(val: string) => { fieldSearch.value = val }}
+          placeholder="搜索字段"
+          size="small"
+          clearable
+        />
+        <div class="fields-panel__body">
+          {store.globalData === null ? (
+            <el-empty description="尚未创建数据集">
+              {{
+                default: () => (
+                  <el-button type="primary" size="small" onClick={() => emit('openDataManager')}>
+                    创建数据集
+                  </el-button>
+                ),
+              }}
+            </el-empty>
+          ) : (
+            <>
+              {renderFieldGroup('维度', filteredDimensionFields.value, 'dimension')}
+              {renderFieldGroup('指标', filteredNumericFields.value, 'metric')}
+              {renderFieldGroup('数组对象数据集', filteredTableKeys.value, 'dataset')}
+            </>
+          )}
+        </div>
+      </aside>
+    )
+
+    return () => (
+      <div class="config-panel config-panel--split">
+        <section class="properties-panel">
+          <div class="properties-panel__header">
+            <div>
+              <div class="properties-panel__title">
+                {store.selectedComponent ? componentLabel.value : '属性配置'}
+              </div>
+              <div class="properties-panel__subtitle">
+                {store.selectedComponent ? store.selectedComponent.type : '选中画布组件后开始配置'}
+              </div>
+            </div>
+          </div>
+
+          {!store.selectedComponent ? (
+            <div class="properties-empty">
+              <div class="properties-empty__icon">↖</div>
+              <div>从顶部工具栏添加组件，或选中画布上的组件。</div>
+            </div>
+          ) : (
+            <el-tabs
+              model-value={activeTab.value}
+              onUpdate:model-value={(val: 'data' | 'style' | 'advanced') => { activeTab.value = val }}
+              class="properties-tabs"
+            >
+              <el-tab-pane label="数据" name="data">{renderDataTab()}</el-tab-pane>
+              <el-tab-pane label="样式" name="style">{renderStyleTab()}</el-tab-pane>
+              <el-tab-pane label="高级" name="advanced">{renderAdvancedTab()}</el-tab-pane>
+            </el-tabs>
+          )}
+        </section>
+        {renderFieldsPanel()}
       </div>
     )
   },

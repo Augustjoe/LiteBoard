@@ -1,4 +1,4 @@
-import { defineComponent, onMounted, ref, computed, nextTick } from 'vue'
+import { defineComponent, onMounted, ref, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useEditorStore, type ChartType, type DataPool, type TableSchema, type TextSchema } from '../stores/editorStore'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -48,38 +48,15 @@ return data;`)
     const jsExtension = javascript()
     const themeExtension = oneDark
 
-    /** 折叠面板激活项，默认展开当前数据集和组件添加 */
-    const activeCollapse = ref(['canvas-config', 'global-data', 'add-component'])
-
     /** 画布内容容器引用 */
     const canvasContentRef = ref<HTMLElement | null>(null)
 
-    /** 左/右面板宽度和显示状态 */
-    const leftPanelWidth = ref(350)
-    const rightPanelWidth = ref(320)
-    const isLeftPanelVisible = ref(true)
+    /** 右侧面板宽度和显示状态 */
+    const rightPanelWidth = ref(560)
     const isRightPanelVisible = ref(true)
+    const showDataManagerDialog = ref(false)
 
-    const leftPanelShouldShow = computed(() => !store.isFullscreenPreview && isLeftPanelVisible.value)
-    const rightPanelShouldShow = computed(() => !store.isFullscreenPreview && store.selectedComponent !== null && isRightPanelVisible.value)
-
-    const onLeftResizeStart = (e: MouseEvent) => {
-      e.preventDefault()
-      const startX = e.clientX
-      const startWidth = leftPanelWidth.value
-      const maxW = window.innerWidth * 0.4
-      const onMove = (me: MouseEvent) => {
-        let w = startWidth + (me.clientX - startX)
-        w = Math.max(200, Math.min(w, maxW))
-        leftPanelWidth.value = w
-      }
-      const onUp = () => {
-        window.removeEventListener('mousemove', onMove)
-        window.removeEventListener('mouseup', onUp)
-      }
-      window.addEventListener('mousemove', onMove)
-      window.addEventListener('mouseup', onUp)
-    }
+    const rightPanelShouldShow = computed(() => !store.isFullscreenPreview && isRightPanelVisible.value)
 
     const onRightResizeStart = (e: MouseEvent) => {
       e.preventDefault()
@@ -88,7 +65,7 @@ return data;`)
       const maxW = window.innerWidth * 0.4
       const onMove = (me: MouseEvent) => {
         let w = startWidth - (me.clientX - startX)
-        w = Math.max(200, Math.min(w, maxW))
+        w = Math.max(360, Math.min(w, maxW))
         rightPanelWidth.value = w
       }
       const onUp = () => {
@@ -99,73 +76,59 @@ return data;`)
       window.addEventListener('mouseup', onUp)
     }
 
-    /** 新增组件配置弹窗显隐 */
-    const showConfigDialog = ref(false)
-
-    /** 新增组件的临时状态 */
-    const pendingType = ref<ChartType>('bar')
-    const pendingX = ref(150)
-    const pendingY = ref(150)
-
-    // 配置表单状态
-    const configTitle = ref('自定义图表')
-    const configChartType = ref<ChartType>('bar')
-    const configColor = ref('#409eff')
-    const configUseJS = ref(false)
-    const configXField = ref('')
-    const configYField = ref('')
-    const configNameField = ref('')
-    const configValueField = ref('')
-    const configJSCode = ref(`// res 是当前仪表盘数据集对象。请返回处理后的新数据对象。
-// 格式要求：return { xAxis: [...], yAxis: [...] };
-return {
-  xAxis: Object.keys(res),
-  yAxis: Object.values(res)
-};`)
-    const configJSError = ref<string | null>(null)
-
     const chartTypesUsingXY = new Set<ChartType>(['bar', 'line', 'scatter'])
     const chartTypesUsingNameValue = new Set<ChartType>(['pie', 'funnel'])
 
-    // 拖拽与点击逻辑
-    const onDragStart = (e: DragEvent, type: ChartType) => {
-      e.dataTransfer?.setData('text/plain', type)
-    }
-
     const getDefaultTitle = (type: ChartType) => `新建${CHART_META[type]?.label ?? '图表'}`
 
-    const resetChartConfig = (type: ChartType) => {
-      configTitle.value = getDefaultTitle(type)
-      configChartType.value = type
-      configColor.value = '#409eff'
-      configUseJS.value = type === 'radar'
+    const getDefaultCustomDataCode = (type: ChartType) => type === 'radar'
+      ? `// res 是当前仪表盘数据集对象。
+// 请返回雷达图数据：{ indicator: [{ name: '销售', max: 100 }], value: [80] }
+return {
+  indicator: Object.keys(res).map((key) => ({ name: key, max: 100 })),
+  value: Object.values(res).map((list) => Array.isArray(list) ? Number(list[0]) || 0 : 0)
+};`
+      : `// res 是当前仪表盘数据集对象。
+// 柱/线/散点返回 { xAxis: [...], yAxis: [...] }
+// 饼/漏斗返回 { name: [...], value: [...] }
+// 仪表盘返回 { value: [...] }
+return {
+  xAxis: Object.keys(res),
+  yAxis: Object.values(res).map((list) => Array.isArray(list) ? list.length : 0)
+};`
+
+    const getChartProps = (type: ChartType) => {
       const defaults = store.getDefaultChartFields()
-      configXField.value = defaults.xAxisField
-      configYField.value = defaults.yAxisField
-      configNameField.value = store.getDefaultNameField()
-      configValueField.value = store.getDefaultValueField()
-      configJSCode.value = type === 'radar'
-        ? `// res 是当前仪表盘数据集对象。\n// 请返回雷达图数据：{ indicator: [{ name: '销售', max: 100 }], value: [80] }\nreturn {\n  indicator: Object.keys(res).map((key) => ({ name: key, max: 100 })),\n  value: Object.values(res).map((list) => Array.isArray(list) ? Number(list[0]) || 0 : 0)\n};`
-        : `// res 是当前仪表盘数据集对象。\n// 柱/线/散点返回 { xAxis: [...], yAxis: [...] }\n// 饼/漏斗返回 { name: [...], value: [...] }\n// 仪表盘返回 { value: [...] }\nreturn {\n  xAxis: Object.keys(res),\n  yAxis: Object.values(res).map((list) => Array.isArray(list) ? list.length : 0)\n};`
+      return {
+        chartSchema: {
+          chartType: type,
+          xAxisField: chartTypesUsingXY.has(type) ? defaults.xAxisField : '',
+          yAxisField: chartTypesUsingXY.has(type) ? defaults.yAxisField : '',
+          nameField: chartTypesUsingNameValue.has(type) ? store.getDefaultNameField() : '',
+          valueField: chartTypesUsingNameValue.has(type) || type === 'gauge' ? store.getDefaultValueField() : '',
+          title: getDefaultTitle(type),
+          color: '#409eff',
+          useCustomDataCode: type === 'radar',
+          customDataCode: getDefaultCustomDataCode(type),
+          customOption: '{}',
+        },
+      }
     }
 
-    const onComponentClick = (type: ChartType) => {
-      pendingType.value = type
-      pendingX.value = 150
-      pendingY.value = 150
-      resetChartConfig(type)
-      showConfigDialog.value = true
+    const addChartComponent = (type: ChartType, position?: { x: number; y: number }) => {
+      store.addComponent(`chart-${type}`, getChartProps(type))
+      if (store.selectedComponent && position) {
+        store.updateComponentPosition(store.selectedComponent.id, {
+          x: position.x,
+          y: position.y,
+          w: type === 'gauge' ? 360 : 480,
+          h: 320,
+        })
+      }
+      ElMessage.success(`${CHART_META[type]?.label ?? '图表'}已添加`)
     }
 
-    const openConfigModal = (type: ChartType, x: number, y: number) => {
-      pendingType.value = type
-      pendingX.value = x
-      pendingY.value = y
-      resetChartConfig(type)
-      showConfigDialog.value = true
-    }
-
-    const addTextComponent = () => {
+    const addTextComponent = (position?: { x: number; y: number }) => {
       const textSchema: TextSchema = {
         content: '仪表盘标题',
         fontSize: 36,
@@ -176,9 +139,12 @@ return {
         padding: 16,
       }
       store.addComponent('text', { textSchema })
+      if (store.selectedComponent && position) {
+        store.updateComponentPosition(store.selectedComponent.id, position)
+      }
     }
 
-    const addTableComponent = () => {
+    const addTableComponent = (position?: { x: number; y: number }) => {
       const dataKey = store.getTableDataKeys()[0] ?? ''
       const tableSchema: TableSchema = {
         title: '数据表格',
@@ -188,64 +154,13 @@ return {
         showHeader: true,
       }
       store.addComponent('table', { tableSchema })
-    }
-
-    const handleConfirmConfig = () => {
-      configJSError.value = null
-
-      if (configUseJS.value) {
-        try {
-          const fn = new Function('res', configJSCode.value)
-          const testData = store.globalData || {}
-          const testResult = fn(testData)
-          if (!testResult || typeof testResult !== 'object') {
-            configJSError.value = 'JS 代码返回值必须是一个包含 xAxis 和 yAxis 数组的对象！'
-            return
-          }
-        } catch (err) {
-          configJSError.value = 'JS 代码执行异常: ' + (err instanceof Error ? err.message : String(err))
-          return
-        }
-      } else {
-        if (chartTypesUsingXY.has(configChartType.value) && (!configXField.value || !configYField.value)) {
-          ElMessage.error('请绑定 X 轴与 Y 轴的数据字段')
-          return
-        }
-        if (chartTypesUsingNameValue.has(configChartType.value) && (!configNameField.value || !configValueField.value)) {
-          ElMessage.error('请绑定名称字段与数值字段')
-          return
-        }
-        if (configChartType.value === 'gauge' && !configValueField.value) {
-          ElMessage.error('请绑定仪表盘数值字段')
-          return
-        }
-      }
-
-      store.addComponent(`chart-${configChartType.value}`, {
-        chartSchema: {
-          chartType: configChartType.value,
-          xAxisField: configXField.value,
-          yAxisField: configYField.value,
-          nameField: configNameField.value,
-          valueField: configValueField.value,
-          title: configTitle.value,
-          color: configColor.value,
-          useCustomDataCode: configUseJS.value,
-          customDataCode: configJSCode.value,
-          customOption: '{}',
-        },
-      })
-      if (store.selectedComponent) {
+      if (store.selectedComponent && position) {
         store.updateComponentPosition(store.selectedComponent.id, {
-          x: pendingX.value,
-          y: pendingY.value,
-          w: configChartType.value === 'gauge' ? 360 : 480,
+          ...position,
+          w: 560,
           h: 320,
         })
       }
-      
-      ElMessage.success('图表组件添加成功')
-      showConfigDialog.value = false
     }
 
     onMounted(async () => {
@@ -268,6 +183,20 @@ return {
       editGlobalDataMode.value = 'json'
       editGlobalDataError.value = null
       showEditGlobalDataDialog.value = true
+    }
+
+    const openDataManager = () => {
+      showDataManagerDialog.value = true
+    }
+
+    const openProbeFromManager = () => {
+      showDataManagerDialog.value = false
+      showProbeDialog.value = true
+    }
+
+    const openEditFromManager = () => {
+      showDataManagerDialog.value = false
+      openEditGlobalData()
     }
 
     const parseEditJson = (): unknown => {
@@ -338,188 +267,16 @@ return {
 
     return () => (
       <div class="editor-shell">
-        {/* 顶部导航栏 */}
-        <EditorHeader />
+        <EditorHeader
+          rightPanelVisible={isRightPanelVisible.value}
+          onAddChart={(type: ChartType) => addChartComponent(type)}
+          onAddText={() => addTextComponent()}
+          onAddTable={() => addTableComponent()}
+          onToggleRightPanel={() => { isRightPanelVisible.value = !isRightPanelVisible.value }}
+        />
 
         {/* 主体区域 */}
         <div class="editor-body">
-          {/* 左侧数据集与组件添加面板 */}
-          {leftPanelShouldShow.value && (
-            <aside class="editor-panel editor-panel--left" style={{ width: `${leftPanelWidth.value}px`, display: 'flex', flexDirection: 'column', overflowY: 'auto', position: 'relative' }}>
-              <div class="resize-handle resize-handle-left" onMousedown={onLeftResizeStart}></div>
-              <div style={{ padding: '8px', borderBottom: '1px solid #ebeef5', display: 'flex', justifyContent: 'flex-end' }}>
-                <el-button link size="small" onClick={() => isLeftPanelVisible.value = false}>◀ 折叠面板</el-button>
-              </div>
-              <el-collapse model-value={activeCollapse.value} onUpdate:model-value={(val: any) => { activeCollapse.value = val }}>
-                <el-collapse-item name="canvas-config">
-                  {{
-                    title: () => <span style={{ fontSize: '14px', fontWeight: 'bold', paddingLeft: '8px' }}>📐 画布调整</span>,
-                    default: () => (
-                      <div style={{ padding: '10px' }}>
-                        <el-form label-position="top" size="small">
-                          <div style={{ display: 'flex', gap: '10px' }}>
-                            <el-form-item label="宽度 (px)" style={{ flex: 1, marginBottom: '10px' }}>
-                              <el-input-number model-value={store.canvasConfig.width} onUpdate:model-value={(v: number) => store.updateCanvasConfig({ width: v })} controls={false} style={{ width: '100%' }} />
-                            </el-form-item>
-                            <el-form-item label="高度 (px)" style={{ flex: 1, marginBottom: '10px' }}>
-                              <el-input-number model-value={store.canvasConfig.height} onUpdate:model-value={(v: number) => store.updateCanvasConfig({ height: v })} controls={false} style={{ width: '100%' }} />
-                            </el-form-item>
-                          </div>
-                          <el-form-item label="缩放比例" style={{ marginBottom: 0 }}>
-                            <el-slider model-value={store.canvasConfig.scale * 100} onUpdate:model-value={(v: number) => store.updateCanvasConfig({ scale: v / 100 })} min={50} max={200} step={10} format-tooltip={(v: number) => `${v}%`} />
-                          </el-form-item>
-                        </el-form>
-                      </div>
-                    )
-                  }}
-                </el-collapse-item>
-                <el-collapse-item name="global-data">
-                  {{
-                    title: () => <span style={{ fontSize: '14px', fontWeight: 'bold', paddingLeft: '8px' }}>🌐 当前数据集</span>,
-                    default: () => (
-                      <div class="asset-market__list" style={{ padding: '10px' }}>
-                        {store.globalData === null ? (
-                          <div class="global-data-empty">
-                            <el-empty description="尚未创建当前仪表盘数据集" />
-                            <div style={{ padding: '0 16px', marginTop: '-16px' }}>
-                              <el-button
-                                type="primary"
-                                size="large"
-                                icon="Upload"
-                                onClick={() => { showProbeDialog.value = true }}
-                                style={{ width: '100%' }}
-                              >
-                                创建数据集
-                              </el-button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div class="global-data-mounted">
-                            <div class="global-data-status">
-                              <span style={{ color: '#67c23a', fontWeight: 600, fontSize: '14px' }}>
-                                ✅ 当前数据集已就绪
-                              </span>
-                            </div>
-
-                            <div class="global-data-preview">
-                              <div style={{ fontSize: '12px', fontWeight: 600, color: '#606266', marginBottom: '6px' }}>
-                                📋 数据集预览（只读）
-                              </div>
-                              <el-input
-                                type="textarea"
-                                readonly
-                                rows={8}
-                                model-value={JSON.stringify(store.globalData, null, 2)}
-                                style={{ width: '100%' }}
-                              />
-                            </div>
-
-                            <div style={{ padding: '12px 0', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                              <el-button
-                                type="warning"
-                                icon="Refresh"
-                                onClick={() => { showProbeDialog.value = true }}
-                                style={{ width: '100%' }}
-                              >
-                                更新当前数据集
-                              </el-button>
-                              <el-button
-                                type="default"
-                                icon="Edit"
-                                onClick={openEditGlobalData}
-                                style={{ width: '100%' }}
-                              >
-                                ✏️ 编辑数据集
-                              </el-button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  }}
-                </el-collapse-item>
-
-                <el-collapse-item name="add-component">
-                  {{
-                    title: () => <span style={{ fontSize: '14px', fontWeight: 'bold', paddingLeft: '8px' }}>🧩 添加组件</span>,
-                    default: () => (
-                      <div class="add-component-panel" style={{ padding: '10px' }}>
-                        <div style={{ fontSize: '12px', fontWeight: 700, color: '#606266', marginBottom: '8px' }}>
-                          基础组件
-                        </div>
-                        <div class="component-card-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
-                          <div class="component-card-item" onClick={addTextComponent} style={{
-                            border: '1px solid #dcdfe6',
-                            borderRadius: '6px',
-                            padding: '12px',
-                            textAlign: 'center',
-                            cursor: 'pointer',
-                            background: '#fff',
-                            transition: 'all 0.2s',
-                            userSelect: 'none'
-                          }}>
-                            <div style={{ fontSize: '22px', marginBottom: '6px' }}>T</div>
-                            <div style={{ fontSize: '12px', fontWeight: '600' }}>文本/标题</div>
-                          </div>
-                          <div class="component-card-item" onClick={addTableComponent} style={{
-                            border: '1px solid #dcdfe6',
-                            borderRadius: '6px',
-                            padding: '12px',
-                            textAlign: 'center',
-                            cursor: 'pointer',
-                            background: '#fff',
-                            transition: 'all 0.2s',
-                            userSelect: 'none'
-                          }}>
-                            <div style={{ fontSize: '22px', marginBottom: '6px' }}>▦</div>
-                            <div style={{ fontSize: '12px', fontWeight: '600' }}>普通表格</div>
-                          </div>
-                        </div>
-
-                        <div style={{ fontSize: '12px', fontWeight: 700, color: '#606266', marginBottom: '8px' }}>
-                          图表组件
-                        </div>
-                        <div class="component-card-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                          {CORE_CHART_TYPES.map((type) => (
-                            <div
-                              class="component-card-item"
-                              draggable={true}
-                              onDragstart={(e: DragEvent) => onDragStart(e, type)}
-                              onClick={() => onComponentClick(type)}
-                              style={{
-                                border: '1px solid #dcdfe6',
-                                borderRadius: '6px',
-                                padding: '12px',
-                                textAlign: 'center',
-                                cursor: 'grab',
-                                background: '#fff',
-                                transition: 'all 0.2s',
-                                userSelect: 'none'
-                              }}
-                            >
-                              <div style={{ fontSize: '22px', marginBottom: '6px' }}>{CHART_META[type].icon}</div>
-                              <div style={{ fontSize: '12px', fontWeight: '600' }}>{CHART_META[type].label}</div>
-                            </div>
-                          ))}
-                        </div>
-                        <div style={{ fontSize: '11px', color: '#909399', marginTop: '12px', textAlign: 'center' }}>
-                          提示：图表和表格优先使用当前数据集，文本可直接添加。
-                        </div>
-                      </div>
-                    )
-                  }}
-                </el-collapse-item>
-              </el-collapse>
-            </aside>
-          )}
-
-          {/* 左侧折叠开关 */}
-          {!store.isFullscreenPreview && !isLeftPanelVisible.value && (
-            <div class="panel-toggle-btn toggle-left" onClick={() => isLeftPanelVisible.value = true}>
-              ▶
-            </div>
-          )}
-
           {/* 中间主工作区 — 点阵网格画布 */}
           <main
             class="editor-main"
@@ -540,7 +297,7 @@ return {
                 const scale = store.canvasConfig.scale || 1
                 const x = Math.max(0, (e.clientX - rect.left) / scale - 240) // center size offset
                 const y = Math.max(0, (e.clientY - rect.top) / scale - 160)
-                openConfigModal(type, x, y)
+                addChartComponent(type, { x, y })
               }
             }}
           >
@@ -559,8 +316,7 @@ return {
             </div>
           </main>
 
-          {/* 右侧折叠开关 */}
-          {!store.isFullscreenPreview && store.selectedComponent !== null && !isRightPanelVisible.value && (
+          {!store.isFullscreenPreview && !isRightPanelVisible.value && (
             <div class="panel-toggle-btn toggle-right" onClick={() => isRightPanelVisible.value = true}>
               ◀
             </div>
@@ -573,10 +329,41 @@ return {
               <div style={{ padding: '8px', borderBottom: '1px solid #ebeef5', display: 'flex', justifyContent: 'flex-start' }}>
                 <el-button link size="small" onClick={() => isRightPanelVisible.value = false}>▶ 折叠面板</el-button>
               </div>
-              <ChartConfigPanel />
+              <ChartConfigPanel onOpenDataManager={openDataManager} />
             </aside>
           )}
         </div>
+
+        <el-dialog
+          model-value={showDataManagerDialog.value}
+          onUpdate:model-value={(val: boolean) => { showDataManagerDialog.value = val }}
+          title="当前数据集管理"
+          width="720px"
+          top="8vh"
+        >
+          <div class="data-manager-dialog">
+            {store.globalData === null ? (
+              <el-empty description="尚未创建当前数据集" />
+            ) : (
+              <div class="data-manager-summary">
+                {store.dataPoolEntries.map((entry) => (
+                  <div class="data-manager-summary__item" key={entry.name}>
+                    <div class="data-manager-summary__name">{entry.name}</div>
+                    <div class="data-manager-summary__meta">{entry.kind} · {entry.length} 条</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div class="data-manager-actions">
+              <el-button type="primary" icon="Refresh" onClick={openProbeFromManager}>
+                更新数据集
+              </el-button>
+              <el-button icon="Edit" onClick={openEditFromManager} disabled={store.globalData === null}>
+                全量编辑 / JS 清洗
+              </el-button>
+            </div>
+          </div>
+        </el-dialog>
 
         {/* 超级探针弹窗 */}
         <DataProbe
@@ -738,125 +525,6 @@ return {
           `}</style>
         </el-dialog>
 
-        {/* 新增组件初始化配置弹窗 */}
-        <el-dialog
-          model-value={showConfigDialog.value}
-          onUpdate:model-value={(val: boolean) => { if (!val) showConfigDialog.value = false }}
-          title={`🧩 初始化图表配置 — ${CHART_META[pendingType.value]?.label ?? '图表'}`}
-          width="650px"
-          top="10vh"
-          close-on-click-modal={false}
-          destroy-on-close
-        >
-          <el-form label-width="120px">
-            {/* 基础配置段 */}
-            <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '6px' }}>基础属性</h4>
-            
-            <el-form-item label="图表标题">
-              <el-input model-value={configTitle.value} onUpdate:model-value={(v: string) => { configTitle.value = v }} placeholder="如: 月度销量统计" />
-            </el-form-item>
-            
-            <el-form-item label="图表类型">
-              <el-select
-                model-value={configChartType.value}
-                onUpdate:model-value={(v: ChartType) => {
-                  resetChartConfig(v)
-                  pendingType.value = v
-                }}
-                style={{ width: '100%' }}
-              >
-                {CORE_CHART_TYPES.map((type) => (
-                  <el-option key={type} label={`${CHART_META[type].icon} ${CHART_META[type].label}`} value={type} />
-                ))}
-              </el-select>
-            </el-form-item>
-
-            <el-form-item label="主题颜色">
-              <el-color-picker model-value={configColor.value} onUpdate:model-value={(v: string) => { configColor.value = v || '#409eff' }} />
-            </el-form-item>
-
-            {/* 数据来源段 */}
-            <h4 style={{ margin: '20px 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '6px' }}>数据来源</h4>
-            
-            <el-form-item label="配置模式">
-              <el-radio-group model-value={configUseJS.value} onUpdate:model-value={(v: boolean) => { configUseJS.value = v }}>
-                <el-radio label={false} disabled={configChartType.value === 'radar'}>数据集字段选择</el-radio>
-                <el-radio label={true}>手写 JS 代码转换</el-radio>
-              </el-radio-group>
-            </el-form-item>
-
-            {!configUseJS.value && chartTypesUsingXY.has(configChartType.value) ? (
-              <>
-                <el-form-item label="X 轴绑定字段">
-                  <el-select model-value={configXField.value} onUpdate:model-value={(v: string) => { configXField.value = v }} placeholder="选择维度字段" style={{ width: '100%' }}>
-                    {store.availableFields.map(f => (
-                      <el-option key={f} label={f} value={f} />
-                    ))}
-                  </el-select>
-                </el-form-item>
-                <el-form-item label="Y 轴绑定字段">
-                  <el-select model-value={configYField.value} onUpdate:model-value={(v: string) => { configYField.value = v }} placeholder="选择指标字段" style={{ width: '100%' }}>
-                    {store.availableFields.map(f => (
-                      <el-option key={f} label={f} value={f} />
-                    ))}
-                  </el-select>
-                </el-form-item>
-              </>
-            ) : !configUseJS.value && chartTypesUsingNameValue.has(configChartType.value) ? (
-              <>
-                <el-form-item label="名称字段">
-                  <el-select model-value={configNameField.value} onUpdate:model-value={(v: string) => { configNameField.value = v }} placeholder="选择名称字段" style={{ width: '100%' }}>
-                    {store.availableFields.map(f => (
-                      <el-option key={f} label={f} value={f} />
-                    ))}
-                  </el-select>
-                </el-form-item>
-                <el-form-item label="数值字段">
-                  <el-select model-value={configValueField.value} onUpdate:model-value={(v: string) => { configValueField.value = v }} placeholder="选择数值字段" style={{ width: '100%' }}>
-                    {store.availableFields.map(f => (
-                      <el-option key={f} label={f} value={f} />
-                    ))}
-                  </el-select>
-                </el-form-item>
-              </>
-            ) : !configUseJS.value && configChartType.value === 'gauge' ? (
-              <el-form-item label="数值字段">
-                <el-select model-value={configValueField.value} onUpdate:model-value={(v: string) => { configValueField.value = v }} placeholder="选择数值字段" style={{ width: '100%' }}>
-                  {store.availableFields.map(f => (
-                    <el-option key={f} label={f} value={f} />
-                  ))}
-                </el-select>
-              </el-form-item>
-            ) : !configUseJS.value && configChartType.value === 'radar' ? (
-              <div style={{ margin: '0 0 10px 120px' }}>
-                <el-alert title="雷达图 v1 使用 JS 转换生成 indicator/value" type="info" closable={false} />
-              </div>
-            ) : (
-              <div style={{ margin: '0 0 10px 120px' }}>
-                <div style={{ fontSize: '12px', color: '#909399', marginBottom: '6px' }}>
-                  变量 <strong>res</strong> 代表当前仪表盘数据集。请按当前图表类型返回对应数组。
-                </div>
-                <div style={{ border: '1px solid #dcdfe6', borderRadius: '6px', overflow: 'hidden', height: '200px' }}>
-                  <Codemirror
-                    model-value={configJSCode.value}
-                    onUpdate:model-value={(v: string) => { configJSCode.value = v }}
-                    extensions={[jsExtension, themeExtension]}
-                  />
-                </div>
-                {configJSError.value && (
-                  <div style={{ color: '#f56c6c', fontSize: '12px', marginTop: '6px' }}>
-                    ❌ {configJSError.value}
-                  </div>
-                )}
-              </div>
-            )}
-          </el-form>
-          
-          <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-            <el-button onClick={() => { showConfigDialog.value = false }}>取消</el-button>
-            <el-button type="primary" onClick={handleConfirmConfig}>确定并上屏</el-button>
-          </div>
-        </el-dialog>
       </div>
     )
   },

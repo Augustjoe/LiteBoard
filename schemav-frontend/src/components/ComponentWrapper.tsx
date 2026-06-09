@@ -325,6 +325,57 @@ export default defineComponent({
       )
     }
 
+    const renderFloatingToolbar = () => (
+      <div
+        class="component-floating-toolbar"
+        style={{
+          position: 'absolute',
+          top: '-34px',
+          right: '0',
+          height: '28px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '2px',
+          padding: '2px',
+          background: '#0f172a',
+          borderRadius: '4px',
+          boxShadow: '0 6px 16px rgba(15, 23, 42, 0.18)',
+          zIndex: '20',
+        }}
+        onMousedown={(e: MouseEvent) => e.stopPropagation()}
+        onClick={(e: MouseEvent) => e.stopPropagation()}
+      >
+        <el-button
+          link
+          icon="CopyDocument"
+          title="复制"
+          style={{ color: '#fff', padding: '0 6px' }}
+          onClick={store.duplicateSelectedComponent}
+        />
+        <el-button
+          link
+          icon="Top"
+          title="置顶"
+          style={{ color: '#fff', padding: '0 6px' }}
+          onClick={store.bringSelectedToFront}
+        />
+        <el-button
+          link
+          icon="Bottom"
+          title="置底"
+          style={{ color: '#fff', padding: '0 6px' }}
+          onClick={store.sendSelectedToBack}
+        />
+        <el-button
+          link
+          icon="Delete"
+          title="删除"
+          style={{ color: '#fff', padding: '0 6px' }}
+          onClick={() => store.removeComponent(props.component.id)}
+        />
+      </div>
+    )
+
     // ===================== 渲染 =====================
 
     return () => {
@@ -513,6 +564,8 @@ export default defineComponent({
           {/* ---- 选中态缩放手柄 ---- */}
           {isSelected.value &&
             (['nw', 'ne', 'sw', 'se', 'n', 's', 'w', 'e'] as HandleDir[]).map(renderHandle)}
+
+          {isSelected.value && renderFloatingToolbar()}
 
           {/* ---- 选中态标题栏 ---- */}
           {isSelected.value && (
