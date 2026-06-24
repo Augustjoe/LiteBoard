@@ -1,6 +1,6 @@
 import { defineComponent, ref, watch, type PropType, nextTick, computed } from 'vue'
 import { useEditorStore, type DataPool } from '../stores/editorStore'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Codemirror } from 'vue-codemirror'
 import { json } from '@codemirror/lang-json'
 import { javascript } from '@codemirror/lang-javascript'
@@ -70,6 +70,9 @@ export default defineComponent({
     const pendingOverwriteFields = computed(() => (
       pendingImportData.value ? getOverwriteFields(store.globalData, pendingImportData.value) : []
     ))
+    const showOverwriteDialog = ref(false)
+    const overwriteFields = ref<string[]>([])
+    let resolveOverwriteConfirm: ((confirmed: boolean) => void) | null = null
 
     // ==================== CodeMirror 视图引用（用于格式化） ====================
     let manualEditorView: CMEditorView | null = null
@@ -106,15 +109,8 @@ export default defineComponent({
     const commitDataPool = async (data: DataPool, warning: string | null) => {
       const overwriteFields = getOverwriteFields(store.globalData, data)
       if (overwriteFields.length > 0) {
-        await ElMessageBox.confirm(
-          `以下字段已存在，导入后会被覆盖：${overwriteFields.join(', ')}。是否继续导入？`,
-          '确认覆盖字段',
-          {
-            type: 'warning',
-            confirmButtonText: '确认导入',
-            cancelButtonText: '取消',
-          },
-        )
+        const confirmed = await requestOverwriteConfirm(overwriteFields)
+        if (!confirmed) throw new Error('overwrite_cancelled')
       }
 
       store.mergeGlobalData(data)
@@ -126,6 +122,19 @@ export default defineComponent({
         ElMessage.success('数据已导入当前数据集')
       }
       props.onClose()
+    }
+
+    const requestOverwriteConfirm = (fields: string[]) => new Promise<boolean>((resolve) => {
+      overwriteFields.value = fields
+      showOverwriteDialog.value = true
+      resolveOverwriteConfirm = resolve
+    })
+
+    const resolveOverwrite = (confirmed: boolean) => {
+      showOverwriteDialog.value = false
+      const resolve = resolveOverwriteConfirm
+      resolveOverwriteConfirm = null
+      resolve?.(confirmed)
     }
 
     const runFilter = (): DataPoolValidation => {
@@ -552,6 +561,32 @@ export default defineComponent({
             <el-button onClick={() => { showPreviewDialog.value = false }}>继续编辑 JS</el-button>
             <el-button type="primary" icon="Upload" onClick={importPreviewResult}>导入到当前数据集</el-button>
           </div>
+        </el-dialog>
+
+        <el-dialog
+          model-value={showOverwriteDialog.value}
+          onUpdate:model-value={(val: boolean) => { if (!val) resolveOverwrite(false) }}
+          title="确认覆盖字段"
+          width="480px"
+          append-to-body
+          close-on-click-modal={false}
+          class="data-probe-overwrite-dialog"
+        >
+          {{
+            default: () => (
+              <div style={{ lineHeight: 1.7, color: '#303133' }}>
+                以下字段已存在，导入后会被覆盖：
+                <strong>{overwriteFields.value.join(', ')}</strong>
+                。是否继续导入？
+              </div>
+            ),
+            footer: () => (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <el-button onClick={() => resolveOverwrite(false)}>取消</el-button>
+                <el-button type="primary" onClick={() => resolveOverwrite(true)}>确认导入</el-button>
+              </div>
+            ),
+          }}
         </el-dialog>
 
         {/* ==================== 嵌入式样式（scoped via class） ==================== */}

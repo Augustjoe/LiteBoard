@@ -1,6 +1,6 @@
-import { defineComponent, onMounted, ref, computed } from 'vue'
+import { defineComponent, onMounted, ref, computed, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { useEditorStore, type ChartType, type DataPool, type TableSchema, type TextSchema } from '../stores/editorStore'
+import { useEditorStore, type ChartType, type DataPool, type MetricCardSchema, type TableSchema, type TextSchema } from '../stores/editorStore'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Codemirror } from 'vue-codemirror'
 import { json } from '@codemirror/lang-json'
@@ -163,6 +163,28 @@ return {
       }
     }
 
+    const addMetricCardComponent = (position?: { x: number; y: number }) => {
+      const metricCardSchema: MetricCardSchema = {
+        title: '核心指标',
+        valueField: store.getDefaultValueField(),
+        aggregate: 'first',
+        prefix: '',
+        suffix: '',
+        decimals: 0,
+        color: '#2563eb',
+        background: '#ffffff',
+      }
+      store.addComponent('metric-card', { metricCardSchema })
+      if (store.selectedComponent) {
+        store.updateComponentPosition(store.selectedComponent.id, {
+          x: position?.x ?? store.selectedComponent.position.x,
+          y: position?.y ?? store.selectedComponent.position.y,
+          w: 300,
+          h: 160,
+        })
+      }
+    }
+
     onMounted(async () => {
       const taskId = route.params.taskId as string | undefined
       if (taskId) {
@@ -170,6 +192,9 @@ return {
         const ok = await store.loadTask(taskId)
         if (!ok) {
           console.warn(`[EditorView] 任务加载失败: ${taskId}`)
+        }
+        if (route.query.preview === '1' && !store.isFullscreenPreview) {
+          store.toggleFullscreenPreview()
         }
       } else {
         console.log('[EditorView] 无 taskId，显示空白编辑器')
@@ -189,8 +214,9 @@ return {
       showDataManagerDialog.value = true
     }
 
-    const openProbeFromManager = () => {
+    const openProbeFromManager = async () => {
       showDataManagerDialog.value = false
+      await nextTick()
       showProbeDialog.value = true
     }
 
@@ -266,20 +292,35 @@ return {
     }
 
     return () => (
-      <div class="editor-shell">
-        <EditorHeader
-          rightPanelVisible={isRightPanelVisible.value}
-          onAddChart={(type: ChartType) => addChartComponent(type)}
-          onAddText={() => addTextComponent()}
-          onAddTable={() => addTableComponent()}
-          onToggleRightPanel={() => { isRightPanelVisible.value = !isRightPanelVisible.value }}
-        />
+      <div class={['editor-shell', store.isFullscreenPreview ? 'editor-shell--preview' : '']}>
+        {!store.isFullscreenPreview && (
+          <EditorHeader
+            rightPanelVisible={isRightPanelVisible.value}
+            onAddChart={(type: ChartType) => addChartComponent(type)}
+            onAddText={() => addTextComponent()}
+            onAddTable={() => addTableComponent()}
+            onAddMetricCard={() => addMetricCardComponent()}
+            onToggleRightPanel={() => { isRightPanelVisible.value = !isRightPanelVisible.value }}
+          />
+        )}
+
+        {store.isFullscreenPreview && (
+          <el-button
+            class="preview-exit-button"
+            type="primary"
+            icon="Close"
+            size="small"
+            onClick={() => store.toggleFullscreenPreview()}
+          >
+            退出预览
+          </el-button>
+        )}
 
         {/* 主体区域 */}
         <div class="editor-body">
           {/* 中间主工作区 — 点阵网格画布 */}
           <main
-            class="editor-main"
+            class={['editor-main', store.isFullscreenPreview ? 'editor-main--preview' : '']}
             style={{
               flex: store.isFullscreenPreview ? '1 1 100%' : undefined,
               position: 'relative'
@@ -301,9 +342,9 @@ return {
               }
             }}
           >
-            <div class="editor-canvas">
+            <div class={['editor-canvas', store.isFullscreenPreview ? 'editor-canvas--preview' : '']}>
               <div 
-                class="canvas-content" 
+                class={['canvas-content', store.isFullscreenPreview ? 'canvas-content--preview' : '']}
                 ref={canvasContentRef}
                 style={{
                   width: `${store.canvasConfig.width}px`,
@@ -366,10 +407,12 @@ return {
         </el-dialog>
 
         {/* 超级探针弹窗 */}
-        <DataProbe
-          visible={showProbeDialog.value}
-          onClose={() => { showProbeDialog.value = false }}
-        />
+        {showProbeDialog.value && (
+          <DataProbe
+            visible={showProbeDialog.value}
+            onClose={() => { showProbeDialog.value = false }}
+          />
+        )}
 
         {/* 全量编辑当前数据集弹窗 */}
         <el-dialog

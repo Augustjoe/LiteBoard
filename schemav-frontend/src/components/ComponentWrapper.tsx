@@ -1,5 +1,5 @@
 import { defineComponent, ref, computed, onMounted, onUnmounted, watch, type PropType } from 'vue'
-import { useEditorStore, type ComponentInstance, type ChartSchema, type TableSchema, type TextSchema } from '../stores/editorStore'
+import { useEditorStore, type ComponentInstance, type ChartSchema, type MetricCardSchema, type TableSchema, type TextSchema } from '../stores/editorStore'
 import { buildChartOption, getChartBlockReason } from '../utils/chartOptions'
 import VChart from 'vue-echarts'
 
@@ -42,7 +42,7 @@ export default defineComponent({
 
     // ===================== 派生状态 =====================
 
-    const isSelected = computed(() => store.selectedComponentId === props.component.id)
+    const isSelected = computed(() => !store.isFullscreenPreview && store.selectedComponentId === props.component.id)
 
     const wrapperStyle = computed(() => {
       const pos = props.component.position
@@ -125,6 +125,43 @@ export default defineComponent({
       return Object.keys(tableRows.value[0]).map((key) => ({ key, label: key, visible: true }))
     })
 
+    const metricCardSchema = computed<MetricCardSchema>(() => {
+      return (props.component.props.metricCardSchema as MetricCardSchema | undefined) ?? {
+        title: '指标卡',
+        valueField: '',
+        aggregate: 'first',
+        prefix: '',
+        suffix: '',
+        decimals: 0,
+        color: '#2563eb',
+        background: '#ffffff',
+      }
+    })
+
+    const metricCardValue = computed(() => {
+      const schema = metricCardSchema.value
+      const values = schema.valueField && store.globalData?.[schema.valueField]
+      if (!Array.isArray(values)) return null
+      const numbers = values.map((item) => Number(item)).filter((item) => Number.isFinite(item))
+      if (schema.aggregate === 'count') return values.length
+      if (numbers.length === 0) return null
+      if (schema.aggregate === 'sum') return numbers.reduce((sum, item) => sum + item, 0)
+      if (schema.aggregate === 'avg') return numbers.reduce((sum, item) => sum + item, 0) / numbers.length
+      if (schema.aggregate === 'max') return Math.max(...numbers)
+      if (schema.aggregate === 'min') return Math.min(...numbers)
+      return Number.isFinite(Number(values[0])) ? Number(values[0]) : null
+    })
+
+    const metricCardDisplay = computed(() => {
+      const value = metricCardValue.value
+      if (value === null) return '--'
+      const decimals = Math.max(0, metricCardSchema.value.decimals ?? 0)
+      return `${metricCardSchema.value.prefix || ''}${Number(value).toLocaleString(undefined, {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals,
+      })}${metricCardSchema.value.suffix || ''}`
+    })
+
     // ===================== 键盘删除 =====================
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -139,6 +176,7 @@ export default defineComponent({
     // ===================== 拖拽逻辑 =====================
 
     const onDragMouseDown = (e: MouseEvent) => {
+      if (store.isFullscreenPreview) return
       // 只在鼠标左键时拖拽
       if (e.button !== 0) return
       e.preventDefault()
@@ -318,6 +356,8 @@ export default defineComponent({
       return (
         <div
           key={dir}
+          class="component-resize-handle"
+          data-dir={dir}
           style={style}
           onMousedown={(e: MouseEvent) => onResizeMouseDown(dir, e)}
           onPointerdown={(e: PointerEvent) => e.stopPropagation()}
@@ -394,12 +434,14 @@ export default defineComponent({
               : '0 2px 12px rgba(0, 0, 0, 0.08)',
             overflow: 'hidden',
             transition: isDragging.value || isResizing.value ? 'none' : 'box-shadow 0.15s',
-            cursor: isDragging.value ? 'grabbing' : 'grab',
+            cursor: store.isFullscreenPreview ? 'default' : isDragging.value ? 'grabbing' : 'grab',
           }}
           onMousedown={onDragMouseDown}
           onClick={(e: MouseEvent) => {
             e.stopPropagation()
-            store.selectComponent(comp.id)
+            if (!store.isFullscreenPreview) {
+              store.selectComponent(comp.id)
+            }
           }}
         >
           {/* ---- 内容区域 ---- */}
@@ -543,6 +585,61 @@ export default defineComponent({
                     </table>
                   </div>
                 )}
+              </div>
+            ) : type === 'metric-card' ? (
+              <div
+                class="lb-metric-card"
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'center',
+                  padding: '20px 24px',
+                  background: metricCardSchema.value.background || '#ffffff',
+                  color: '#1f2937',
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: '14px',
+                    color: '#64748b',
+                    fontWeight: 600,
+                    marginBottom: '12px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {metricCardSchema.value.title || '指标卡'}
+                </div>
+                <div
+                  style={{
+                    fontSize: '40px',
+                    lineHeight: 1,
+                    fontWeight: 800,
+                    color: metricCardSchema.value.color || '#2563eb',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {metricCardDisplay.value}
+                </div>
+                <div
+                  style={{
+                    marginTop: '12px',
+                    fontSize: '12px',
+                    color: '#94a3b8',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {metricCardSchema.value.valueField
+                    ? `${metricCardSchema.value.valueField} · ${metricCardSchema.value.aggregate}`
+                    : '请选择数值字段'}
+                </div>
               </div>
             ) : (
               <div

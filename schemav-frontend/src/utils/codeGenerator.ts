@@ -1,4 +1,4 @@
-import type { ChartSchema, ComponentInstance, DashboardSchema, TableSchema, TextSchema } from '../stores/editorStore'
+import type { ChartSchema, ComponentInstance, DashboardSchema, MetricCardSchema, TableSchema, TextSchema } from '../stores/editorStore'
 
 function serializeJson(value: unknown): string {
   try {
@@ -96,6 +96,27 @@ function buildTableTemplate(comp: ComponentInstance): string[] {
   ].filter(Boolean)
 }
 
+function buildMetricCardTemplate(comp: ComponentInstance): string[] {
+  const varName = `metric_${safeVarName(comp.id)}`
+  const schema = (comp.props.metricCardSchema as MetricCardSchema | undefined) ?? {
+    title: '指标卡',
+    valueField: '',
+    aggregate: 'first',
+    prefix: '',
+    suffix: '',
+    decimals: 0,
+    color: '#2563eb',
+    background: '#ffffff',
+  }
+  return [
+    `      <div class="lb-metric-card" style="background: ${schema.background || '#ffffff'};">`,
+    `        <div class="lb-metric-card__title">${escapeHtml(schema.title || '指标卡')}</div>`,
+    `        <div class="lb-metric-card__value" style="color: ${schema.color || '#2563eb'};">{{ ${varName}.display }}</div>`,
+    `        <div class="lb-metric-card__meta">${escapeHtml(schema.valueField ? `${schema.valueField} · ${schema.aggregate}` : '请选择数值字段')}</div>`,
+    `      </div>`,
+  ]
+}
+
 function buildChartTemplate(comp: ComponentInstance): string[] {
   return [
     `      <v-chart`,
@@ -119,6 +140,35 @@ function buildTableDataCode(comp: ComponentInstance): string {
     rows,
     columns: Object.keys(rows[0]).map(key => ({ key, label: key, visible: true })),
   }
+})()`
+}
+
+function buildMetricCardDataCode(comp: ComponentInstance): string {
+  const schema = (comp.props.metricCardSchema as MetricCardSchema | undefined) ?? {
+    title: '指标卡',
+    valueField: '',
+    aggregate: 'first',
+    prefix: '',
+    suffix: '',
+    decimals: 0,
+    color: '#2563eb',
+    background: '#ffffff',
+  }
+  return `const metric_${safeVarName(comp.id)} = (() => {
+  const values = Array.isArray(globalData?.[${jsString(schema.valueField)}]) ? globalData[${jsString(schema.valueField)}] : []
+  const numbers = values.map(item => Number(item)).filter(item => Number.isFinite(item))
+  let value = null
+  if (${jsString(schema.aggregate)} === 'count') value = values.length
+  else if (numbers.length > 0 && ${jsString(schema.aggregate)} === 'sum') value = numbers.reduce((sum, item) => sum + item, 0)
+  else if (numbers.length > 0 && ${jsString(schema.aggregate)} === 'avg') value = numbers.reduce((sum, item) => sum + item, 0) / numbers.length
+  else if (numbers.length > 0 && ${jsString(schema.aggregate)} === 'max') value = Math.max(...numbers)
+  else if (numbers.length > 0 && ${jsString(schema.aggregate)} === 'min') value = Math.min(...numbers)
+  else if (values.length > 0 && Number.isFinite(Number(values[0]))) value = Number(values[0])
+  const decimals = Math.max(0, ${schema.decimals ?? 0})
+  const display = value === null
+    ? '--'
+    : ${jsString(schema.prefix || '')} + Number(value).toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) + ${jsString(schema.suffix || '')}
+  return { value, display }
 })()`
 }
 
@@ -254,6 +304,7 @@ export function generateVueCode(schema: DashboardSchema): string {
   const sorted = [...components].sort((a, b) => a.zIndex - b.zIndex)
   const chartComponents = sorted.filter(isChartComponent)
   const tableComponents = sorted.filter((comp) => comp.type === 'table')
+  const metricComponents = sorted.filter((comp) => comp.type === 'metric-card')
 
   const templateLines: string[] = [
     `<template>`,
@@ -269,6 +320,8 @@ export function generateVueCode(schema: DashboardSchema): string {
       templateLines.push(...buildTextTemplate(comp))
     } else if (comp.type === 'table') {
       templateLines.push(...buildTableTemplate(comp))
+    } else if (comp.type === 'metric-card') {
+      templateLines.push(...buildMetricCardTemplate(comp))
     } else {
       templateLines.push(`      <div class="lb-empty">${escapeHtml(comp.type)}</div>`)
     }
@@ -314,6 +367,11 @@ export function generateVueCode(schema: DashboardSchema): string {
     scriptLines.push(``)
   })
 
+  metricComponents.forEach((comp) => {
+    scriptLines.push(buildMetricCardDataCode(comp))
+    scriptLines.push(``)
+  })
+
   scriptLines.push(`</script>`)
   scriptLines.push(``)
 
@@ -327,6 +385,10 @@ export function generateVueCode(schema: DashboardSchema): string {
     `.lb-table table { width: 100%; border-collapse: collapse; font-size: 12px; }`,
     `.lb-table th { position: sticky; top: 0; padding: 8px 10px; text-align: left; background: #f5f7fa; border-bottom: 1px solid #ebeef5; color: #606266; white-space: nowrap; }`,
     `.lb-table td { padding: 8px 10px; border-bottom: 1px solid #f0f2f5; white-space: nowrap; }`,
+    `.lb-metric-card { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; padding: 20px 24px; color: #1f2937; }`,
+    `.lb-metric-card__title { margin-bottom: 12px; color: #64748b; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }`,
+    `.lb-metric-card__value { font-size: 40px; line-height: 1; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }`,
+    `.lb-metric-card__meta { margin-top: 12px; color: #94a3b8; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }`,
     `.lb-table__empty, .lb-empty { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #909399; font-size: 13px; }`,
     `</style>`,
     ``,

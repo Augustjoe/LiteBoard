@@ -52,6 +52,19 @@ export interface TableSchema {
   showHeader: boolean
 }
 
+export type MetricAggregate = 'first' | 'sum' | 'avg' | 'count' | 'max' | 'min'
+
+export interface MetricCardSchema {
+  title: string
+  valueField: string
+  aggregate: MetricAggregate
+  prefix: string
+  suffix: string
+  decimals: number
+  color: string
+  background: string
+}
+
 /** 组件位置与尺寸 */
 export interface ComponentPosition {
   x: number
@@ -157,6 +170,10 @@ function classifyDataPoolEntry(values: any[]): DataPoolEntryKind {
   return 'field-array'
 }
 
+function isFieldArray(values: any[]): boolean {
+  return classifyDataPoolEntry(values) === 'field-array'
+}
+
 function cloneComponent(component: ComponentInstance): ComponentInstance {
   return JSON.parse(JSON.stringify(component)) as ComponentInstance
 }
@@ -210,12 +227,17 @@ export const useEditorStore = defineStore('editor', () => {
 
   const numericFields = computed<string[]>(() => {
     if (!globalData.value) return []
-    return availableFields.value.filter((field) => isNumericArray(globalData.value![field]))
+    return availableFields.value.filter((field) => (
+      isFieldArray(globalData.value![field]) && isNumericArray(globalData.value![field])
+    ))
   })
 
   const dimensionFields = computed<string[]>(() => {
     const numeric = new Set(numericFields.value)
-    return availableFields.value.filter((field) => !numeric.has(field))
+    if (!globalData.value) return []
+    return availableFields.value.filter((field) => (
+      !numeric.has(field) && isFieldArray(globalData.value![field])
+    ))
   })
 
   const dataPoolEntries = computed<DataPoolEntrySummary[]>(() => {
@@ -314,11 +336,11 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function getDefaultValueField(): string {
-    return numericFields.value[0] ?? availableFields.value[0] ?? ''
+    return numericFields.value[0] ?? dimensionFields.value[0] ?? ''
   }
 
   function getDefaultNameField(): string {
-    return dimensionFields.value[0] ?? availableFields.value[0] ?? ''
+    return dimensionFields.value[0] ?? numericFields.value[0] ?? ''
   }
 
   function getTableDataKeys(): string[] {
@@ -426,6 +448,23 @@ export const useEditorStore = defineStore('editor', () => {
       next.columns = inferTableColumns(partial.dataKey)
     }
     comp.props.tableSchema = next
+    markDirty()
+  }
+
+  function updateMetricCardSchema(partial: Partial<MetricCardSchema>) {
+    const comp = selectedComponent.value
+    if (!comp) return
+    const current = (comp.props.metricCardSchema as MetricCardSchema | undefined) ?? {
+      title: '指标卡',
+      valueField: getDefaultValueField(),
+      aggregate: 'first',
+      prefix: '',
+      suffix: '',
+      decimals: 0,
+      color: '#2563eb',
+      background: '#ffffff',
+    }
+    comp.props.metricCardSchema = { ...current, ...partial }
     markDirty()
   }
 
@@ -704,6 +743,7 @@ export const useEditorStore = defineStore('editor', () => {
     updateChartSchema,
     updateTextSchema,
     updateTableSchema,
+    updateMetricCardSchema,
     updateCustomOption,
     removeComponent,
     duplicateSelectedComponent,

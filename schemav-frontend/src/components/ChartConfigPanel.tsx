@@ -7,6 +7,8 @@ import {
   useEditorStore,
   type ChartSchema,
   type ChartType,
+  type MetricAggregate,
+  type MetricCardSchema,
   type TableSchema,
   type TextSchema,
 } from '../stores/editorStore'
@@ -29,6 +31,7 @@ export default defineComponent({
     const isChart = computed(() => selectedType.value.startsWith('chart-'))
     const isText = computed(() => selectedType.value === 'text')
     const isTable = computed(() => selectedType.value === 'table')
+    const isMetricCard = computed(() => selectedType.value === 'metric-card')
 
     const chartSchema = computed<ChartSchema>(() => {
       const cs = store.selectedComponent?.props?.chartSchema as ChartSchema | undefined
@@ -59,7 +62,22 @@ export default defineComponent({
       }
     })
 
+    const metricCardSchema = computed<MetricCardSchema>(() => {
+      const schema = store.selectedComponent?.props?.metricCardSchema as MetricCardSchema | undefined
+      return schema ?? {
+        title: '指标卡',
+        valueField: store.getDefaultValueField(),
+        aggregate: 'first',
+        prefix: '',
+        suffix: '',
+        decimals: 0,
+        color: '#2563eb',
+        background: '#ffffff',
+      }
+    })
+
     const componentLabel = computed(() => {
+      if (isMetricCard.value) return '指标卡'
       if (isText.value) return '文本'
       if (isTable.value) return '表格'
       if (isChart.value) return CHART_META[chartSchema.value.chartType]?.label ?? '图表'
@@ -152,6 +170,7 @@ export default defineComponent({
     const updateChart = (partial: Partial<ChartSchema>) => store.updateChartSchema(partial)
     const updateText = (partial: Partial<TextSchema>) => store.updateTextSchema(partial)
     const updateTable = (partial: Partial<TableSchema>) => store.updateTableSchema(partial)
+    const updateMetricCard = (partial: Partial<MetricCardSchema>) => store.updateMetricCardSchema(partial)
 
     const onChartTypeChange = (val: string | number | boolean) => {
       const chartType = String(val) as ChartType
@@ -313,6 +332,39 @@ export default defineComponent({
           </el-form>
         )}
 
+        {isMetricCard.value && (
+          <el-form label-position="top" size="default">
+            <el-form-item label="数值字段">
+              <el-select
+                model-value={metricCardSchema.value.valueField}
+                onUpdate:model-value={(val: string) => updateMetricCard({ valueField: val })}
+                placeholder={store.numericFields.length ? '选择数值字段' : '暂无数值字段'}
+                style={{ width: '100%' }}
+                clearable
+                disabled={store.availableFields.length === 0}
+              >
+                {(store.numericFields.length > 0 ? store.numericFields : store.availableFields).map((field) => (
+                  <el-option key={field} label={field} value={field} />
+                ))}
+              </el-select>
+            </el-form-item>
+            <el-form-item label="计算方式">
+              <el-select
+                model-value={metricCardSchema.value.aggregate}
+                onUpdate:model-value={(val: MetricAggregate) => updateMetricCard({ aggregate: val })}
+                style={{ width: '100%' }}
+              >
+                <el-option label="第一个值" value="first" />
+                <el-option label="求和" value="sum" />
+                <el-option label="平均值" value="avg" />
+                <el-option label="计数" value="count" />
+                <el-option label="最大值" value="max" />
+                <el-option label="最小值" value="min" />
+              </el-select>
+            </el-form-item>
+          </el-form>
+        )}
+
         {isText.value && (
           <el-alert title="文本组件不依赖数据集，可在样式中编辑内容和视觉属性。" type="info" closable={false} />
         )}
@@ -394,6 +446,60 @@ export default defineComponent({
                 <el-option label="透明" value="transparent" />
                 <el-option label="白底" value="#ffffff" />
                 <el-option label="浅灰" value="#f5f7fa" />
+              </el-select>
+            </el-form-item>
+          </el-form>
+        )}
+
+        {isMetricCard.value && (
+          <el-form label-position="top" size="default">
+            <el-form-item label="标题">
+              <el-input
+                model-value={metricCardSchema.value.title}
+                onUpdate:model-value={(val: string) => updateMetricCard({ title: val })}
+              />
+            </el-form-item>
+            <div class="config-inline-grid">
+              <el-form-item label="前缀">
+                <el-input
+                  model-value={metricCardSchema.value.prefix}
+                  onUpdate:model-value={(val: string) => updateMetricCard({ prefix: val })}
+                  placeholder="如 ¥"
+                />
+              </el-form-item>
+              <el-form-item label="后缀">
+                <el-input
+                  model-value={metricCardSchema.value.suffix}
+                  onUpdate:model-value={(val: string) => updateMetricCard({ suffix: val })}
+                  placeholder="如 %"
+                />
+              </el-form-item>
+            </div>
+            <el-form-item label="小数位">
+              <el-input-number
+                model-value={metricCardSchema.value.decimals}
+                onUpdate:model-value={(val: number) => updateMetricCard({ decimals: Math.max(0, val || 0) })}
+                min={0}
+                max={6}
+                style={{ width: '100%' }}
+              />
+            </el-form-item>
+            <el-form-item label="数值颜色">
+              <el-color-picker
+                model-value={metricCardSchema.value.color}
+                onUpdate:model-value={(val: string) => updateMetricCard({ color: val || '#2563eb' })}
+              />
+            </el-form-item>
+            <el-form-item label="背景">
+              <el-select
+                model-value={metricCardSchema.value.background}
+                onUpdate:model-value={(val: string) => updateMetricCard({ background: val })}
+                style={{ width: '100%' }}
+              >
+                <el-option label="白底" value="#ffffff" />
+                <el-option label="浅蓝" value="#eff6ff" />
+                <el-option label="浅绿" value="#ecfdf5" />
+                <el-option label="浅灰" value="#f8fafc" />
               </el-select>
             </el-form-item>
           </el-form>

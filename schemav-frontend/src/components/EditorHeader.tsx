@@ -24,6 +24,10 @@ export default defineComponent({
       type: Function as PropType<() => void>,
       required: true,
     },
+    onAddMetricCard: {
+      type: Function as PropType<() => void>,
+      required: true,
+    },
     onToggleRightPanel: {
       type: Function as PropType<() => void>,
       required: true,
@@ -191,6 +195,10 @@ export default defineComponent({
             <button class="editor-header__tool" type="button" onClick={() => props.onAddTable()}>
               <span class="editor-header__tool-icon">▦</span>
               <span>表格</span>
+            </button>
+            <button class="editor-header__tool" type="button" onClick={() => props.onAddMetricCard()}>
+              <span class="editor-header__tool-icon">#</span>
+              <span>指标卡</span>
             </button>
           </div>
         )}

@@ -12,6 +12,17 @@
   background: #f0f2f5;
 }
 
+.editor-shell--preview {
+  background: #111827;
+}
+
+.preview-exit-button {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 5000;
+}
+
 .editor-header {
   position: relative;
   z-index: 100;
@@ -243,6 +254,10 @@
   min-width: 0;
 }
 
+.editor-main--preview {
+  background: #111827;
+}
+
 /* Node 4 升级：画布改为 position:relative 容器 */
 .editor-canvas {
   width: 100%;
@@ -250,6 +265,14 @@
   position: relative;
   overflow: auto;
   background: #eef0f3;
+}
+
+.editor-canvas--preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  background: #111827;
 }
 
 /* 实际缩放内容的容器 */
@@ -265,6 +288,14 @@
   background-color: #fff;
   background-image: radial-gradient(circle, #d8dde6 1px, transparent 1px);
   background-size: 20px 20px;
+}
+
+.canvas-content--preview {
+  position: relative;
+  top: auto;
+  left: auto;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+  background-image: none;
 }
 
 .data-manager-dialog {
@@ -384,6 +415,12 @@
 
 .config-section {
   padding: 14px;
+}
+
+.config-inline-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
 }
 
 .config-help {
