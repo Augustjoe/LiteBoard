@@ -108,6 +108,8 @@ export interface Task {
   cover: string
   createdAt: string
   updatedAt: string
+  published?: boolean
+  publishedAt?: string | null
   schema: DashboardSchema
 }
 
@@ -199,6 +201,8 @@ export const useEditorStore = defineStore('editor', () => {
 
   /** 当前编辑内容的保存状态 */
   const saveStatus = ref<SaveStatus>('idle')
+  const isPublished = ref(false)
+  const publishedAt = ref<string | null>(null)
 
   /** 当前选中的组件 ID（null 表示未选中） */
   const selectedComponentId = ref<string | null>(null)
@@ -603,6 +607,8 @@ export const useEditorStore = defineStore('editor', () => {
 
       currentTaskId.value = task.id
       applySchema(task.schema)
+      isPublished.value = Boolean(task.published)
+      publishedAt.value = task.publishedAt ?? null
 
       console.log(`[editorStore] 任务已加载: ${task.id} — "${task.name}"`)
       return true
@@ -686,8 +692,62 @@ export const useEditorStore = defineStore('editor', () => {
     isFullscreenPreview.value = false
     currentTaskId.value = null
     saveStatus.value = 'idle'
+    isPublished.value = false
+    publishedAt.value = null
     _nextId = 1
     console.log('[editorStore] 编辑器已完全重置')
+  }
+
+  async function publishTask(): Promise<boolean> {
+    const taskId = currentTaskId.value
+    if (!taskId) {
+      console.warn('[editorStore] no currentTaskId, cannot publish')
+      return false
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/${taskId}/publish`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        console.error(`[editorStore] publish task failed HTTP ${res.status}`)
+        return false
+      }
+
+      const task: Task = await res.json()
+      isPublished.value = Boolean(task.published)
+      publishedAt.value = task.publishedAt ?? null
+      return true
+    } catch (err) {
+      console.error('[editorStore] publish task error:', err)
+      return false
+    }
+  }
+
+  async function unpublishTask(): Promise<boolean> {
+    const taskId = currentTaskId.value
+    if (!taskId) {
+      console.warn('[editorStore] no currentTaskId, cannot unpublish')
+      return false
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/${taskId}/unpublish`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        console.error(`[editorStore] unpublish task failed HTTP ${res.status}`)
+        return false
+      }
+
+      const task: Task = await res.json()
+      isPublished.value = Boolean(task.published)
+      publishedAt.value = task.publishedAt ?? null
+      return true
+    } catch (err) {
+      console.error('[editorStore] unpublish task error:', err)
+      return false
+    }
   }
 
   function toggleFullscreenPreview(): void {
@@ -713,6 +773,8 @@ export const useEditorStore = defineStore('editor', () => {
     globalData,
     components,
     saveStatus,
+    isPublished,
+    publishedAt,
     selectedComponentId,
     isFullscreenPreview,
     canvasConfig,
@@ -755,6 +817,8 @@ export const useEditorStore = defineStore('editor', () => {
     // persistence
     loadTask,
     saveTask,
+    publishTask,
+    unpublishTask,
     saveSchema,
     loadSchema,
     clearCanvas,

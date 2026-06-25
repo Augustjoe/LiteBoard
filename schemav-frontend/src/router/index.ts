@@ -23,6 +23,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../views/EditorView'),
     props: true,
   },
+  {
+    path: '/share/:taskId',
+    name: 'share',
+    component: () => import('../views/ShareView'),
+    props: true,
+  },
 ]
 
 const router = createRouter({

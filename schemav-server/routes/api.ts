@@ -8,6 +8,9 @@ import {
   updateTask,
   deleteTask,
   copyTask,
+  publishTask,
+  unpublishTask,
+  getSharedTask,
 } from '../controllers/taskController.js';
 
 const router = Router();
@@ -17,6 +20,8 @@ router.post('/probe', probe);
 
 // GET /api/mock-chart-data — 图表测试数据
 router.get('/mock-chart-data', getMockChartData);
+
+router.get('/share/:id', getSharedTask);
 
 // ============================================================
 // Task CRUD
@@ -39,5 +44,9 @@ router.delete('/tasks/:id', deleteTask);
 
 // POST /api/tasks/:id/copy — 复制任务
 router.post('/tasks/:id/copy', copyTask);
+
+router.post('/tasks/:id/publish', publishTask);
+
+router.post('/tasks/:id/unpublish', unpublishTask);
 
 export default router;

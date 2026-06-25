@@ -40,6 +40,14 @@ export default defineComponent({
     const codeDialogVisible = ref(false)
     const generatedCode = ref('')
     const copySuccess = ref(false)
+    const shareDialogVisible = ref(false)
+    const shareCopySuccess = ref(false)
+    const publishLoading = ref(false)
+    const unpublishLoading = ref(false)
+
+    const shareLink = computed(() => (
+      store.currentTaskId ? `${window.location.origin}/share/${store.currentTaskId}` : ''
+    ))
 
     const saveLabel = computed(() => {
       if (store.saveStatus === 'saving') return '保存中'
@@ -93,6 +101,90 @@ export default defineComponent({
       const ok = await store.saveTask()
       if (ok) ElMessage.success('仪表盘已保存')
       else ElMessage.error('保存失败，请重试')
+    }
+
+    const copyShareLink = async () => {
+      if (!shareLink.value) return
+      try {
+        await navigator.clipboard.writeText(shareLink.value)
+      } catch {
+        const textarea = document.createElement('textarea')
+        textarea.value = shareLink.value
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+      }
+      shareCopySuccess.value = true
+      setTimeout(() => {
+        shareCopySuccess.value = false
+      }, 2000)
+    }
+
+    const onPublishShare = async () => {
+      if (!store.currentTaskId) {
+        ElMessage.warning('无法发布：当前没有关联任务')
+        return
+      }
+
+      publishLoading.value = true
+      try {
+        if (store.saveStatus === 'dirty' || store.saveStatus === 'error' || store.saveStatus === 'idle') {
+          const saved = await store.saveTask()
+          if (!saved) {
+            ElMessage.error('发布前保存失败，请先检查当前仪表盘')
+            return
+          }
+        }
+
+        if (!store.isPublished) {
+          const ok = await store.publishTask()
+          if (!ok) {
+            ElMessage.error('发布失败，请稍后重试')
+            return
+          }
+          ElMessage.success('仪表盘已发布')
+        }
+
+        shareDialogVisible.value = true
+      } finally {
+        publishLoading.value = false
+      }
+    }
+
+    const onOpenShareLink = () => {
+      if (!shareLink.value) return
+      window.open(shareLink.value, '_blank')
+    }
+
+    const onUnpublishShare = async () => {
+      try {
+        await ElMessageBox.confirm(
+          '取消发布后，当前分享链接将立即失效。确定取消发布吗？',
+          '取消发布',
+          {
+            confirmButtonText: '确定取消发布',
+            cancelButtonText: '取消',
+            type: 'warning',
+          },
+        )
+      } catch {
+        return
+      }
+
+      unpublishLoading.value = true
+      try {
+        const ok = await store.unpublishTask()
+        if (!ok) {
+          ElMessage.error('取消发布失败，请稍后重试')
+          return
+        }
+        ElMessage.success('已取消发布')
+      } finally {
+        unpublishLoading.value = false
+      }
     }
 
     const onClearCanvas = () => {
@@ -257,9 +349,56 @@ export default defineComponent({
           {renderIconButton(store.isFullscreenPreview ? '退出预览' : '全屏预览', store.isFullscreenPreview ? 'Close' : 'View', () => store.toggleFullscreenPreview())}
           {renderIconButton('保存', 'FolderChecked', onSave, 'editor-header__icon-button--primary', 'primary', store.saveStatus === 'saving')}
           {renderIconButton('导出 Vue', 'Document', onExportCode)}
+          {renderIconButton(store.isPublished ? '分享链接' : '发布分享', 'Share', onPublishShare, '', undefined, publishLoading.value)}
           {!store.isFullscreenPreview && renderIconButton(props.rightPanelVisible ? '收起配置' : '展开配置', props.rightPanelVisible ? 'Fold' : 'Expand', props.onToggleRightPanel)}
           {!store.isFullscreenPreview && renderIconButton('清空画布', 'Delete', onClearCanvas, 'editor-header__icon-button--danger', 'danger')}
         </div>
+
+        <el-dialog
+          v-model={shareDialogVisible.value}
+          title="发布与分享"
+          width="520px"
+          close-on-click-modal={false}
+        >
+          {{
+            default: () => (
+              <div class="share-dialog">
+                <el-alert
+                  title={store.isPublished ? '当前仪表盘已发布，可通过下方链接访问。' : '当前仪表盘尚未发布。'}
+                  type={store.isPublished ? 'success' : 'info'}
+                  show-icon
+                  closable={false}
+                />
+                <div class="share-dialog__link-row">
+                  <el-input model-value={shareLink.value} readonly />
+                  <el-button icon="CopyDocument" onClick={copyShareLink} disabled={!store.isPublished}>
+                    {shareCopySuccess.value ? '已复制' : '复制'}
+                  </el-button>
+                </div>
+                <div class="share-dialog__meta">
+                  {store.publishedAt
+                    ? `发布时间：${new Date(store.publishedAt).toLocaleString()}`
+                    : '发布后会立即生成只读访问链接。'}
+                </div>
+              </div>
+            ),
+            footer: () => (
+              <div class="share-dialog__footer">
+                <el-button onClick={() => { shareDialogVisible.value = false }}>
+                  关闭
+                </el-button>
+                {store.isPublished && (
+                  <el-button loading={unpublishLoading.value} onClick={onUnpublishShare}>
+                    取消发布
+                  </el-button>
+                )}
+                <el-button type="primary" icon="Position" disabled={!store.isPublished} onClick={onOpenShareLink}>
+                  打开分享页
+                </el-button>
+              </div>
+            ),
+          }}
+        </el-dialog>
 
         <el-dialog
           v-model={codeDialogVisible.value}

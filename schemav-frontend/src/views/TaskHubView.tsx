@@ -30,6 +30,8 @@ interface TaskSummary {
   cover: string
   createdAt: string
   updatedAt: string
+  published?: boolean
+  publishedAt?: string | null
 }
 
 type TimeFilter = 'all' | 'today' | 'last7' | 'last30'
@@ -334,6 +336,11 @@ export default defineComponent({
               <span class="status-chip status-chip--saved">
                 <i /> 已保存
               </span>
+              {task.published && (
+                <span class="status-chip status-chip--published">
+                  <i /> 已发布
+                </span>
+              )}
             </div>
 
             <div class="task-card__actions">

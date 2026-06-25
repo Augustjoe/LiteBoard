@@ -200,6 +200,29 @@
   line-height: 1.6;
 }
 
+.share-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.share-dialog__link-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.share-dialog__meta {
+  color: #667085;
+  font-size: 12px;
+}
+
+.share-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .canvas-settings-popover__title {
   font-size: 13px;
   font-weight: 700;

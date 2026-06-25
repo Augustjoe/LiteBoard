@@ -513,6 +513,15 @@
   background: var(--hub-success);
 }
 
+.status-chip--published {
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.status-chip--published i {
+  background: var(--hub-accent);
+}
+
 .task-card__actions {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -57,6 +57,8 @@ export interface Task {
   cover: string;
   createdAt: string;
   updatedAt: string;
+  published?: boolean;
+  publishedAt?: string | null;
   schema: DashboardSchema;
 }
 
@@ -68,6 +70,8 @@ export interface TaskSummary {
   cover: string;
   createdAt: string;
   updatedAt: string;
+  published?: boolean;
+  publishedAt?: string | null;
 }
 
 // ============================================================
@@ -170,6 +174,8 @@ export const createTask = (req: Request, res: Response): void => {
     cover: generateCover(),
     createdAt: now,
     updatedAt: now,
+    published: false,
+    publishedAt: null,
     schema: createDefaultSchema(name.trim()),
   };
 
@@ -225,6 +231,64 @@ export const updateTask = (req: Request, res: Response): void => {
 };
 
 /** DELETE /api/tasks/:id — 删除任务 */
+/** POST /api/tasks/:id/publish - mark a task as published */
+export const publishTask = (req: Request, res: Response): void => {
+  const { id } = req.params;
+  const tasks = readTasks();
+  const idx = tasks.findIndex((t) => t.id === id);
+
+  if (idx === -1) {
+    res.status(404).json({ message: `Task not found: ${id}` });
+    return;
+  }
+
+  const now = new Date().toISOString();
+  tasks[idx].published = true;
+  tasks[idx].publishedAt = now;
+  tasks[idx].updatedAt = now;
+
+  writeTasks(tasks);
+
+  console.log(`[TaskController] task published ${id}`);
+  res.json(tasks[idx]);
+};
+
+/** POST /api/tasks/:id/unpublish - revoke the public share link */
+export const unpublishTask = (req: Request, res: Response): void => {
+  const { id } = req.params;
+  const tasks = readTasks();
+  const idx = tasks.findIndex((t) => t.id === id);
+
+  if (idx === -1) {
+    res.status(404).json({ message: `Task not found: ${id}` });
+    return;
+  }
+
+  const now = new Date().toISOString();
+  tasks[idx].published = false;
+  tasks[idx].publishedAt = null;
+  tasks[idx].updatedAt = now;
+
+  writeTasks(tasks);
+
+  console.log(`[TaskController] task unpublished ${id}`);
+  res.json(tasks[idx]);
+};
+
+/** GET /api/share/:id - read-only access for published dashboards */
+export const getSharedTask = (req: Request, res: Response): void => {
+  const { id } = req.params;
+  const tasks = readTasks();
+  const task = tasks.find((t) => t.id === id);
+
+  if (!task || !task.published) {
+    res.status(404).json({ message: 'Dashboard is not published or does not exist' });
+    return;
+  }
+
+  res.json(task);
+};
+
 export const deleteTask = (req: Request, res: Response): void => {
   const { id } = req.params;
   const tasks = readTasks();
@@ -262,6 +326,8 @@ export const copyTask = (req: Request, res: Response): void => {
     cover: generateCover(),
     createdAt: now,
     updatedAt: now,
+    published: false,
+    publishedAt: null,
     schema: {
       ...original.schema,
       title: `${original.schema.title} (副本)`,

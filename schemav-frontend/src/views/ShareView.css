@@ -1,0 +1,45 @@
+.share-view {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 0, rgba(96, 165, 250, 0.16), transparent 32%),
+    #0f172a;
+}
+
+.share-view__stage {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.share-view__frame {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.share-view__canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: top left;
+  overflow: hidden;
+}
+
+.share-view__empty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f8fafc;
+}
+
+.share-view__empty-copy {
+  color: #667085;
+  font-size: 13px;
+}
