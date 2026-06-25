@@ -8,6 +8,7 @@ import {
   MoreFilled,
   Plus,
 } from '@element-plus/icons-vue'
+import { dashboardTemplates } from '../data/dashboardTemplates'
 import './TaskHubView.css'
 
 /**
@@ -32,6 +33,7 @@ interface TaskSummary {
 }
 
 type TimeFilter = 'all' | 'today' | 'last7' | 'last30'
+type CreateMode = 'blank' | 'template'
 
 const API_BASE = '/api/tasks'
 
@@ -50,6 +52,8 @@ export default defineComponent({
     const createDialogVisible = ref(false)
     const createForm = ref({ name: '', description: '' })
     const createLoading = ref(false)
+    const createMode = ref<CreateMode>('blank')
+    const selectedTemplateId = ref(dashboardTemplates[0]?.id ?? '')
 
     // ==================== Derived display data ====================
     const sortedTasks = computed(() =>
@@ -80,6 +84,22 @@ export default defineComponent({
       { id: 'last30' as const, label: '近30天' },
     ]
 
+    const selectedTemplate = computed(() =>
+      dashboardTemplates.find((template) => template.id === selectedTemplateId.value) ?? dashboardTemplates[0]
+    )
+
+    const createNamePlaceholder = computed(() =>
+      createMode.value === 'template'
+        ? `例如：${selectedTemplate.value?.name ?? '销售经营'}仪表盘`
+        : '例如：销售数据仪表盘'
+    )
+
+    const createDescriptionPlaceholder = computed(() =>
+      createMode.value === 'template'
+        ? selectedTemplate.value?.description ?? '简要描述仪表盘的用途...'
+        : '简要描述仪表盘的用途...'
+    )
+
     // ==================== API 方法 ====================
 
     async function fetchTasks() {
@@ -96,6 +116,21 @@ export default defineComponent({
       }
     }
 
+    function resetCreateDialog() {
+      createDialogVisible.value = false
+      createMode.value = 'blank'
+      selectedTemplateId.value = dashboardTemplates[0]?.id ?? ''
+      createForm.value = { name: '', description: '' }
+    }
+
+    function openCreateDialog(mode: CreateMode = 'blank') {
+      createMode.value = mode
+      if (mode === 'template' && !selectedTemplateId.value) {
+        selectedTemplateId.value = dashboardTemplates[0]?.id ?? ''
+      }
+      createDialogVisible.value = true
+    }
+
     async function handleCreate() {
       const name = createForm.value.name.trim()
       if (!name) {
@@ -103,24 +138,52 @@ export default defineComponent({
         return
       }
 
+      if (createMode.value === 'template' && !selectedTemplate.value) {
+        ElMessage.warning('请选择一个模板')
+        return
+      }
+
       createLoading.value = true
+      let createdTask: TaskSummary | null = null
       try {
+        const description = createForm.value.description.trim() ||
+          (createMode.value === 'template' ? selectedTemplate.value?.description ?? '' : '')
+
         const res = await fetch(API_BASE, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             name,
-            description: createForm.value.description.trim(),
+            description,
           }),
         })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        createdTask = await res.json()
+
+        if (createMode.value === 'template') {
+          const template = selectedTemplate.value
+          const schema = template.createSchema(name)
+          const updateRes = await fetch(`${API_BASE}/${createdTask!.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ schema }),
+          })
+          if (!updateRes.ok) throw new Error(`HTTP ${updateRes.status}`)
+          ElMessage.success(`已从「${template.name}」创建仪表盘`)
+          resetCreateDialog()
+          await fetchTasks()
+          router.push(`/editor/${createdTask!.id}`)
+          return
+        }
 
         ElMessage.success('仪表盘已创建')
-        createDialogVisible.value = false
-        createForm.value = { name: '', description: '' }
+        resetCreateDialog()
         await fetchTasks()
       } catch (err) {
         console.error('[TaskHub] 创建任务失败:', err)
+        if (createMode.value === 'template' && createdTask?.id) {
+          await fetch(`${API_BASE}/${createdTask.id}`, { method: 'DELETE' }).catch(() => {})
+        }
         ElMessage.error('创建任务失败')
       } finally {
         createLoading.value = false
@@ -328,7 +391,7 @@ export default defineComponent({
               type="primary"
               icon="Plus"
               onClick={() => {
-                createDialogVisible.value = true
+                openCreateDialog()
               }}
             >
               新建仪表盘
@@ -392,7 +455,7 @@ export default defineComponent({
                   type="primary"
                   icon="Plus"
                   onClick={() => {
-                    createDialogVisible.value = true
+                    openCreateDialog()
                   }}
                 >
                   新建仪表盘
@@ -405,7 +468,7 @@ export default defineComponent({
                   <button
                     class="task-card task-card--create"
                     onClick={() => {
-                      createDialogVisible.value = true
+                      openCreateDialog()
                     }}
                   >
                     <span><el-icon><Plus /></el-icon></span>
@@ -446,7 +509,7 @@ export default defineComponent({
             <section class="side-panel">
               <h2>快捷操作</h2>
               <div class="quick-actions">
-                <button onClick={() => { createDialogVisible.value = true }}>
+                <button onClick={() => { openCreateDialog('blank') }}>
                   <el-icon><CirclePlus /></el-icon>
                   从空白创建
                 </button>
@@ -458,24 +521,73 @@ export default defineComponent({
         <el-dialog
           v-model={createDialogVisible.value}
           title="新建仪表盘"
-          width="480px"
+          width="760px"
           close-on-click-modal={false}
-          onClose={() => {
-            createDialogVisible.value = false
-            createForm.value = { name: '', description: '' }
-          }}
+          onClose={resetCreateDialog}
         >
           {{
             default: () => (
               <el-form
                 model={createForm.value}
                 label-position="top"
-                style="padding: 8px 0"
+                class="create-dashboard-form"
               >
+                <div class="create-mode-toggle" role="tablist" aria-label="创建方式">
+                  <button
+                    type="button"
+                    class={['create-mode-button', createMode.value === 'blank' && 'is-active']}
+                    onClick={() => { createMode.value = 'blank' }}
+                  >
+                    <strong>空白创建</strong>
+                    <span>从干净画布开始设计</span>
+                  </button>
+                  <button
+                    type="button"
+                    class={['create-mode-button', createMode.value === 'template' && 'is-active']}
+                    onClick={() => { createMode.value = 'template' }}
+                  >
+                    <strong>模板创建</strong>
+                    <span>选择内置仪表盘模板</span>
+                  </button>
+                </div>
+
+                {createMode.value === 'template' && (
+                  <div class="template-picker">
+                    {dashboardTemplates.map((template) => (
+                      <button
+                        key={template.id}
+                        type="button"
+                        class={['template-card', selectedTemplateId.value === template.id && 'is-active']}
+                        onClick={() => { selectedTemplateId.value = template.id }}
+                      >
+                        <div
+                          class="template-card__preview"
+                          style={{ background: template.preview.background }}
+                        >
+                          <span style={{ color: template.preview.accent }}>{template.preview.label}</span>
+                          <i style={{ background: template.preview.accent }} />
+                          <i style={{ background: template.preview.accent }} />
+                          <i style={{ background: template.preview.accent }} />
+                        </div>
+                        <div class="template-card__body">
+                          <strong>{template.name}</strong>
+                          <p>{template.description}</p>
+                          <div class="template-card__meta">
+                            <span>{template.componentCount} 个组件</span>
+                            {template.tags.map((tag) => (
+                              <em key={tag}>{tag}</em>
+                            ))}
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 <el-form-item label="仪表盘名称" required>
                   <el-input
                     v-model={createForm.value.name}
-                    placeholder="例如：销售数据仪表盘"
+                    placeholder={createNamePlaceholder.value}
                     maxlength={50}
                     show-word-limit
                     onKeydown={(e: KeyboardEvent) => {
@@ -488,7 +600,7 @@ export default defineComponent({
                     v-model={createForm.value.description}
                     type="textarea"
                     rows={3}
-                    placeholder="简要描述仪表盘的用途..."
+                    placeholder={createDescriptionPlaceholder.value}
                     maxlength={200}
                     show-word-limit
                   />
@@ -499,7 +611,7 @@ export default defineComponent({
               <div style="display: flex; justify-content: flex-end; gap: 8px">
                 <el-button
                   onClick={() => {
-                    createDialogVisible.value = false
+                    resetCreateDialog()
                   }}
                 >
                   取消
